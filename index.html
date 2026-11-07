@@ -47,6 +47,8 @@ input.pill::placeholder { color: var(--color-muted); font-weight: 500; }
 .tabs button[aria-selected="true"] { background: var(--color-rule-2); color: var(--color-ink); }
 .tabs button:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
 #signals { margin-top: var(--gap); }
+.stats { margin-top: var(--space-3xl); }
+.stats > section.bare:first-child h2 { font-size: var(--text-xl); }
 #signals > h2 { margin: var(--space-xs) 0 var(--space-md); }
 .state { padding: var(--space-xl); background: var(--color-card); border-radius: var(--radius-card); box-shadow: var(--shadow-card); }
 .state p { margin-top: var(--space-xs); }
@@ -54,13 +56,13 @@ input.pill::placeholder { color: var(--color-muted); font-weight: 500; }
 @media (max-width: 64rem) { .main { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 30rem) { .donut { grid-template-columns: minmax(0, 1fr); } .donut svg { max-width: 200px; margin-inline: auto; } }
 </style></head><body>
-<div class="topbar"><div class="wrap"><strong>소비 패턴</strong><nav class="tabs" role="tablist" aria-label="화면"><button type="button" role="tab" data-view="pattern" aria-selected="true" aria-controls="view-pattern">패턴 분석</button><button type="button" role="tab" data-view="report" aria-selected="false" aria-controls="view-report">쿠팡 4년 리포트</button></nav></div></div>
+<div class="topbar"><div class="wrap"><strong>소비 패턴</strong><nav class="tabs" role="tablist" aria-label="화면"><button type="button" role="tab" data-view="report" aria-selected="true" aria-controls="view-report">AI 분석</button><button type="button" role="tab" data-view="pattern" aria-selected="false" aria-controls="view-pattern">순수 데이터</button></nav></div></div>
 
-<main class="wrap" id="view-pattern" role="tabpanel">
+<main class="wrap" id="view-pattern" role="tabpanel" hidden>
 <div class="pagehead">
   <div>
-    <h1>얼마나, 어디에 썼을까</h1>
-    <p class="sub">월급날(25일) 기준으로 나눴습니다. 계산은 이 브라우저 안에서만 합니다. 공개 주소에서는 지역·개인 정보를 ** 로 가렸습니다.</p>
+    <h1>순수 데이터</h1>
+    <p class="sub">거래 내역을 더하고 나눈 계산 결과만 보여줍니다. 해석과 조언은 'AI 분석' 탭에 있습니다. 월은 월급날(25일) 기준, 공개 주소에서는 지역·개인 정보를 ** 로 가렸습니다.</p>
   </div>
   <form class="controls" id="controls" aria-label="분석 범위">
     <div class="seg" role="radiogroup" aria-label="자료">
@@ -81,9 +83,9 @@ input.pill::placeholder { color: var(--color-muted); font-weight: 500; }
   </div>
 </div>
 </main>
-<main class="wrap" id="view-report" role="tabpanel" hidden></main>
+<main class="wrap" id="view-report" role="tabpanel"></main>
 
-<footer><div class="wrap"><p>카테고리 키워드: 쿠팡 상품은 cats.js, 은행 거래는 cats.js의 BANK_CATS. 데이터 갱신: node build_data.js (패턴 분석), node report.js (리포트)</p></div></footer>
+<footer><div class="wrap"><p>카테고리 키워드: 쿠팡 상품은 cats.js, 은행 거래는 cats.js의 BANK_CATS. 데이터 갱신: node build_data.js (순수 데이터) → node report.js (AI 분석 숫자, 쿠팡 4년 통계). AI 분석의 판단 문장은 데이터가 바뀌면 AI에게 다시 맡겨 고친다</p></div></footer>
 <div id="tip" role="tooltip"></div>
 
 <script>
@@ -129,7 +131,7 @@ function monthChart(months, avg, budget, thisPm) {
   const max = niceMax(Math.max(...months.map(m => m[1].sum), budget || 0));
   const n = months.length, step = (W - L - R) / n, bw = Math.max(4, Math.min(28, step * 0.62));
   const x = i => L + step * i + step / 2, y = v => T + (H - T - B) * (1 - v / max);
-  const limit = budget || avg * 1.2;
+  const limit = budget || Infinity; // 빨간 막대는 사용자가 넣은 예산을 넘은 달만
   let s = ticks(max).map(f => `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(max * f)}" y2="${y(max * f)}"/><text class="ax" x="${L - 8}" y="${y(max * f) + 4}" text-anchor="end">${f ? man(max * f) : '0'}</text>`).join('');
   s += months.map(([k, v], i) => { const cls = k === thisPm ? 'hi' : v.sum > limit ? 'over' : ''; return `<g data-tip="${k} (${pmRange(k)})\n${won(v.sum)} · ${v.cnt}건"><rect class="hit" x="${x(i) - step / 2}" y="${T}" width="${step}" height="${H - T - B}"/><rect class="b ${cls}" x="${x(i) - bw / 2}" y="${y(v.sum)}" width="${bw}" height="${Math.max(0, y(0) - y(v.sum))}" rx="${Math.min(6, bw / 3)}"/></g>`; }).join('');
   const every = Math.max(1, Math.ceil(n / 12));
@@ -190,15 +192,15 @@ function vbars(items, { hi = () => false, sub = () => '' } = {}) {
 const out = document.getElementById('out');
 const form = document.getElementById('controls'), coverage = document.getElementById('coverage');
 
-// 화면 탭: 패턴 분석 / 쿠팡 4년 리포트. 리포트는 report.js 가 만든 report_body.js(window.REPORT_HTML)를 처음 열 때 넣는다
+// 화면 탭: AI 분석(판단·가이드) / 순수 데이터(계산만). 둘 다 report.js 가 만든 report_body.js 를 쓴다 (REPORT_HTML, STATS_HTML)
 const views = { pattern: document.getElementById('view-pattern'), report: document.getElementById('view-report') };
 const tabs = [...document.querySelectorAll('.tabs button')];
-let currentView = 'pattern';
+let currentView = 'report';
 function showView(v) {
-  currentView = views[v] ? v : 'pattern';
+  currentView = views[v] ? v : 'report'; // 기본은 AI 분석
   for (const [k, el] of Object.entries(views)) el.hidden = k !== currentView;
   tabs.forEach(b => b.setAttribute('aria-selected', String(b.dataset.view === currentView)));
-  if (currentView === 'report' && !views.report.innerHTML) views.report.innerHTML = window.REPORT_HTML || '<div class="state error" style="margin-top:var(--space-xl)"><h2 class="h3">리포트가 없습니다</h2><p>프로젝트 폴더에서 <b>node report.js</b>를 실행한 뒤 새로고침하세요.</p></div>';
+  if (currentView === 'report' && !views.report.innerHTML) views.report.innerHTML = window.REPORT_HTML || '<div class="state error" style="margin-top:var(--space-xl)"><h2 class="h3">AI 분석이 없습니다</h2><p>프로젝트 폴더에서 <b>node report.js</b>를 실행한 뒤 새로고침하세요.</p></div>';
 }
 tabs.forEach(b => b.addEventListener('click', () => { showView(b.dataset.view); writeState(); scrollTo(0, 0); }));
 
@@ -255,19 +257,19 @@ function run() {
   // 그 전 12개월 비교는 같은 자료가 다 들어 있을 때만 (은행은 2025-11부터라 '전체'로 비교하면 부풀려진다)
   const prevYearAvg = (() => { if (period !== 'recent' || pms.length < 24) return null; const prev = pms.slice(-24, -12); if (bankAll.length && bs && prev[0] < ym(bs[0])) return null; return sumOf(pool.filter(t => prev.includes(t.pm))) / prev.length; })();
 
-  // 과소비 신호
+  // 기본 통계 (계산 결과만, 좋다·나쁘다 판단 없이)
   const sig = [];
   const small = spend.filter(t => -t.amt <= 15000 && t.cat !== '이체/송금');
   const smallSum = sumOf(small);
-  if (small.length) sig.push({ t: '1만 5천 원 이하 소액 결제', big: small.length.toLocaleString() + '건', p: `${won(smallSum)} · 금액의 ${pct(smallSum, total)}`, r: small.length / spend.length });
+  if (small.length) sig.push({ t: '1만 5천 원 이하 소액 결제', big: small.length.toLocaleString() + '건', p: `${won(smallSum)} · 건수의 ${pct(small.length, spend.length)}, 금액의 ${pct(smallSum, total)}`, r: small.length / spend.length });
   const night = spend.filter(t => t.src !== '쿠팡' && (t.d.getHours() >= 23 || t.d.getHours() < 4)); // 쿠팡 주문은 날짜만 있어 0시로 잡히므로 뺀다
-  if (night.length) { const ns = sumOf(night); sig.push({ t: '밤 11시~새벽 4시 결제', big: night.length + '건', p: `${won(ns)} · 충동구매가 잦은 시간대`, r: ns / total, warn: true }); }
+  if (night.length) { const ns = sumOf(night); sig.push({ t: '밤 11시~새벽 4시 결제 (은행)', big: night.length + '건', p: `${won(ns)} · 금액의 ${pct(ns, total)}`, r: ns / total }); }
   const weSum = sumOf(spend.filter(t => t.d.getDay() === 0 || t.d.getDay() === 6));
-  sig.push({ t: '주말(토·일) 비중', big: pct(weSum, total), p: `주말은 일주일의 29%인데 지출은 ${pct(weSum, total)}`, r: weSum / total, warn: weSum / total > 0.35 });
+  sig.push({ t: '주말(토·일) 비중', big: pct(weSum, total), p: `${won(weSum)} · 일주일 중 주말 비율은 29%`, r: weSum / total });
   const repeat = sumBy(coupang, t => t.desc).filter(e => e[1].cnt >= 3);
-  if (repeat.length) { const rs = repeat.reduce((s, e) => s + e[1].sum, 0); sig.push({ t: '쿠팡 3번 이상 산 상품', big: repeat.length + '종', p: `${won(rs)} · 정기배송·대용량 후보`, r: rs / total }); }
-  const overs = budget ? months.filter(m => m[1].sum > budget) : months.filter(m => m[1].sum > avg * 1.2);
-  sig.push({ t: budget ? `예산을 넘은 달` : '평균보다 20% 넘게 쓴 달', big: `${overs.length}개월`, p: overs.length ? `${months.length}개월 중 · 최대 ${[...overs].sort((a, b) => b[1].sum - a[1].sum)[0][0]} ${man(Math.max(...overs.map(m => m[1].sum)))}원` : `${months.length}개월 중 없음`, r: overs.length / months.length, warn: true });
+  if (repeat.length) { const rs = repeat.reduce((s, e) => s + e[1].sum, 0); sig.push({ t: '쿠팡에서 3번 이상 산 상품', big: repeat.length + '종', p: `${won(rs)} · 금액의 ${pct(rs, total)}`, r: rs / total }); }
+  const overs = budget ? months.filter(m => m[1].sum > budget) : [];
+  if (budget) sig.push({ t: `예산을 넘은 달`, big: `${overs.length}개월`, p: overs.length ? `${months.length}개월 중 · 최대 ${[...overs].sort((a, b) => b[1].sum - a[1].sum)[0][0]} ${man(Math.max(...overs.map(m => m[1].sum)))}원` : `${months.length}개월 중 없음`, r: overs.length / months.length, warn: true });
 
   // 요일, 금액대
   const DOW = ['월', '화', '수', '목', '금', '토', '일'], dowIdx = [1, 2, 3, 4, 5, 6, 0];
@@ -306,7 +308,7 @@ function run() {
     <div class="main">
       <section>
         <h2>월별 지출 <span class="chip">${months.length}개월</span></h2>
-        <p class="lede">파란 막대가 이번 달, 빨간 막대는 ${budget ? '예산' : '평균보다 20% 넘게 쓴 달'}입니다. 막대에 마우스를 올리면 금액이 보입니다.</p>
+        <p class="lede">파란 막대가 이번 달${budget ? ', 빨간 막대는 넣은 예산을 넘은 달' : ''}입니다. 점선은 평균${budget ? '과 예산' : ''}. 막대에 마우스를 올리면 금액이 보입니다.</p>
         <figure>${monthChart(months, avg, budget, thisPm)}</figure>
       </section>
       <section>
@@ -319,8 +321,8 @@ function run() {
     </div>
 
     <section class="bare" id="signals">
-      <h2>과소비 신호</h2>
-      <ul class="signals">${sig.map(s => `<li class="${s.warn ? 'warn' : ''}"><div class="pagehead"><strong>${esc(s.t)}</strong><span class="big">${esc(s.big)}</span></div><div class="meter" role="img" aria-label="비율 ${Math.round(s.r * 100)}%"><span style="width:${Math.min(100, s.r * 100).toFixed(1)}%"></span></div><p>${esc(s.p)}</p></li>`).join('')}</ul>
+      <h2>기본 통계</h2>
+      <ul class="signals">${sig.map(s => `<li><div class="head"><strong>${esc(s.t)}</strong><span class="big">${esc(s.big)}</span></div><div class="meter" role="img" aria-label="비율 ${Math.round(s.r * 100)}%"><span style="width:${Math.min(100, s.r * 100).toFixed(1)}%"></span></div><p>${esc(s.p)}</p></li>`).join('')}</ul>
     </section>
 
     <div class="two">
@@ -343,7 +345,8 @@ function run() {
         <div class="legend">${topCats.map((c, j) => `<span><i class="s${j}"></i>${esc(c)}</span>`).join('')}</div></figure>
     </section>
 
-    ${topItems && topPlaces ? `<div class="two">${topItems}${topPlaces}</div>` : topItems + topPlaces}`;
+    ${topItems && topPlaces ? `<div class="two">${topItems}${topPlaces}</div>` : topItems + topPlaces}
+    ${window.STATS_HTML ? `<div class="stats">${window.STATS_HTML}</div>` : ''}`;
 }
 
 // 기간 목록: 최근 12개월, 전체, 그리고 데이터에 있는 월급 연도

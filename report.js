@@ -136,9 +136,6 @@ const SAVE = [
 ].map(s => ({ ...s, save: s.base * s.rate }));
 const saveTotal = sum(SAVE.map(s => s.save));
 
-// 예산 제안: 최근 12개월 중앙값
-const budget = Math.round(median(last12.map(x => x.sum)) / 10000) * 10000;
-const overBudget = last12.filter(x => x.sum > budget);
 
 // ---------- 출력 도구 ----------
 const won = n => Math.round(n).toLocaleString('ko-KR');
@@ -212,76 +209,100 @@ function hbars(items, { labelW = 260, hiN = 0, sub = null, fmt = v => man(v) + '
 }
 
 // 최근 12개월 + 예산선
-function budgetChart() {
-  const W = 1040, H = 240, L = 48, R = 8, T = 24, B = 30, n = last12.length, step = (W - L - R) / n, bw = Math.min(40, step - 14);
-  const max = niceMax(Math.max(...last12.map(x => x.sum))), x = i => L + step * (i + 0.5), y = v => T + (H - T - B) * (1 - v / max);
-  let s = [0, .5, 1].map(f => `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(max * f)}" y2="${y(max * f)}"/><text class="ax" x="${L - 8}" y="${y(max * f) + 4}" text-anchor="end">${f ? man(max * f) : '0'}</text>`).join('');
-  s += last12.map((m, i) => `<g data-tip="${m.m}\n${won(m.sum)}원${m.sum > budget ? `\n예산보다 ${won(m.sum - budget)}원 많음` : ''}"><rect class="hit" x="${x(i) - step / 2}" y="${T}" width="${step}" height="${H - T - B}"/><rect class="b ${m.sum > budget ? 'over' : ''}" x="${x(i) - bw / 2}" y="${y(m.sum)}" width="${bw}" height="${y(0) - y(m.sum)}"/><text class="ax" x="${x(i)}" y="${H - 10}" text-anchor="middle">${+m.m.slice(5)}월</text></g>`).join('');
-  s += `<line class="ref-warn" x1="${L}" x2="${W - R}" y1="${y(budget)}" y2="${y(budget)}"/><text class="reflbl" x="${L + 6}" y="${y(budget) - 7}">제안 예산 ${man(budget)}원</text>`;
-  return svg(W, H, '최근 12개월 지출과 제안 예산', s);
-}
 
 const legend = (labels, rev = false) => `<div class="legend">${labels.map((k, j) => `<span><i class="s${rev ? labels.length - 1 - j : j}"></i>${esc(k)}</span>`).join('')}</div>`;
+
+// ---------- 은행 + 쿠팡 합친 최근 12개월 (AI 분석용) ----------
+// data.js(build_data.js 가 만든 것, 은행 제외 규칙·카테고리 적용됨)에서 은행 출금을 읽는다. 상호는 쓰지 않고 카테고리만 쓴다.
+const SD = (() => { const w = {}; new Function('window', fs.readFileSync(path.join(__dirname, 'data.js'), 'utf8'))(w); return w.SPEND_DATA; })();
+const winSet = new Set(last12.map(x => x.m));
+const toD = s => { const m = s.match(/(\d{4})\D(\d{2})\D(\d{2})/); return new Date(+m[1], m[2] - 1, +m[3]); };
+const bankOut = SD.bank.filter(r => r[1] === '출금').map(([d, , amt, cat, desc]) => ({ d: toD(d), pm: ym(toD(d)), price: -amt, cat, desc })).filter(r => winSet.has(r.pm));
+const allL12 = [...last12Rows.map(r => ({ d: r.d, pm: r.pm, price: r.price, cat: r.cat, src: '쿠팡' })), ...bankOut.map(r => ({ ...r, src: '은행' }))];
+const allTotal = sum(allL12.map(r => r.price)), allAvg = allTotal / 12;
+const catSum = c => sum(allL12.filter(r => (Array.isArray(c) ? c.includes(r.cat) : r.cat === c)).map(r => r.price)) / 12;
+const FOOD = ['장보기', '유제품·계란', '채소·과일', '고기·수산', '간편식·가공', '음료·생수'];
+const groceryStores = new Set(bankOut.filter(r => r.cat === '장보기').map(r => r.desc)).size;
+const groceryVisits = bankOut.filter(r => r.cat === '장보기').length + last12Rows.filter(r => FOOD.includes(r.cat)).length;
+const payCharge = bankOut.filter(r => r.cat === '페이 충전'), payChargeSum = sum(payCharge.map(r => r.price));
+const allSmall = allL12.filter(r => r.price <= 10000);
+const payDays = new Set(allL12.map(r => r.d.toDateString())).size;
+// 분석에서 뺀 카드대금 (exclude.local.json 의 '출금만 뺌' 이름) — 금액만 쓴다
+const EXOUT = JSON.parse(fs.readFileSync(path.join(__dirname, 'exclude.local.json'), 'utf8')).out;
+const cardBills = fs.readdirSync(path.join(__dirname, 'data')).filter(f => /^kakaobank_.*\.md$/.test(f)).flatMap(f => fs.readFileSync(path.join(__dirname, 'data', f), 'utf8').split(/\r?\n/).filter(l => /^\| 20/.test(l)).map(l => l.slice(2, -2).split(/ (?<!\\)\| /))).filter(c => c[1] === '출금' && EXOUT.includes(c[5].normalize('NFKC').trim())).reduce((s, c) => s - Number(c[2].replace(/,/g, '')), 0);
+const coupangL12 = l12Total;
+
+// AI 가 제안하는 월 예산: 카테고리 묶음별 현재 월평균에 AI 가 정한 조정률을 곱한다 (조정률이 판단이다)
+const PLAN = [
+  { k: '육아', cats: ['육아'], rate: -0.05, why: '필수라 유지, 정기배송·대용량으로 단가만 5%' },
+  { k: '식비 (장보기·식품)', cats: FOOD, rate: -0.15, why: '장보기를 주 2회로 묶어 계획 밖 구매를 줄임' },
+  { k: '외식·배달·카페', cats: ['외식', '배달', '카페/간식', '편의점'], rate: -0.2, why: '주말 한 번으로 정해 두기' },
+  { k: '생활·쇼핑', cats: ['생활·주방', '쇼핑', '뷰티·패션', '온라인쇼핑'], rate: -0.15, why: '장바구니에 담고 다음 장보기 날 결제' },
+  { k: '전자·가전', cats: ['전자·가전'], rate: -0.5, why: '5만 원 넘으면 3일 기다리기' },
+  { k: '페이 충전', cats: ['페이 충전'], rate: -0.3, why: '충전 대신 카드로 바로 결제해 사용처를 남김' },
+  { k: '병원·약국·영양제', cats: ['병원·약국', '영양제'], rate: 0, why: '건강 지출은 줄이지 않음' },
+  { k: '교통·차량', cats: ['교통·차량'], rate: 0, why: '고정 성격이라 유지' },
+  { k: '기타', cats: ['기타', '이체/송금'], rate: -0.1, why: '분류가 정리되면 다시 판단' },
+].map(p => { const cur = catSum(p.cats); return { ...p, cur, next: cur * (1 + p.rate) }; });
+const planCur = sum(PLAN.map(p => p.cur)), planNext = sum(PLAN.map(p => p.next));
+
+// 현재 vs 제안 가로 막대
+function planChart() {
+  const W = 1040, rowH = 50, L = 300, R = 170, H = PLAN.length * rowH, max = Math.max(...PLAN.map(p => p.cur));
+  const sx = v => (W - L - R) * v / max;
+  return svg(W, H, '카테고리별 현재 월평균과 AI 제안 예산', PLAN.map((p, i) => { const y = i * rowH; return `<g data-tip="${esc(p.k)}\n현재 월평균 ${won(p.cur)}원\n제안 ${won(p.next)}원 (${p.rate ? Math.round(p.rate * 100) + '%' : '유지'})\n${esc(p.why)}"><rect class="hit" x="0" y="${y}" width="${W}" height="${rowH}"/><text class="lbl" x="${L - 12}" y="${y + 21}" text-anchor="end">${esc(p.k)}</text><text class="ax" x="${L - 12}" y="${y + 39}" text-anchor="end">${esc(cut(p.why, 24))}</text><rect class="b" x="${L}" y="${y + 7}" width="${Math.max(2, sx(p.cur))}" height="18"/><rect class="b hi" x="${L}" y="${y + 12}" width="${Math.max(2, sx(p.next))}" height="8"/><text class="val" x="${L + sx(p.cur) + 10}" y="${y + 21}">${man(p.cur)} → ${man(p.next)}원</text></g>`; }).join('') + `<line class="axis" x1="${L}" x2="${L}" y1="0" y2="${H}"/>`);
+}
 
 // ---------- 본문 ----------
 const babyUp = g2325.find(x => x.c === '육아').d;
 const l12Avg = l12Total / 12;
 const yrLabel = y => y.y + (y.months < 12 ? `*` : '');
 const binLabels = BINS.map(b => b[0]);
+const asOf = `${TODAY.getFullYear()}-${String(TODAY.getMonth() + 1).padStart(2, '0')}-${String(TODAY.getDate()).padStart(2, '0')}`;
 
-// 리포트 본문. index.html 의 '쿠팡 4년 리포트' 탭에 들어간다 (report_body.js)
-const body = `<header class="top">
-<p class="note">${months[0]} ~ ${months.at(-1)} 월급 월 ${months.length}개월, 주문 ${inWin.length.toLocaleString()}건. 월급날 25일 기준. ${TODAY.getFullYear()}-${String(TODAY.getMonth() + 1).padStart(2, '0')}-${String(TODAY.getDate()).padStart(2, '0')} 작성.</p>
-<h1>쿠팡 지출이 2023년보다 ${pct(l12Avg, Y['2023'].avgM).replace('+', '')} 늘었다</h1>
-<p class="verdict">최근 12개월 월평균은 <b>${man(l12Avg)}원</b>. 2023→2025년 늘어난 돈의 ${share(babyUp, totalUp2325)}가 육아이고, 그다음은 식비다. 계산상 줄일 여력은 연 <b>${man(saveTotal)}원</b>.</p>
-<div class="kpis figs">
-<div class="kpi accent"><div class="k">최근 12개월 월평균</div><div class="v">${man(l12Avg).replace("만", "")}<small>만원</small></div></div>
-<div class="kpi"><div class="k">2023년 월평균 대비</div><div class="v">${pct(l12Avg, Y['2023'].avgM)}</div></div>
-<div class="kpi"><div class="k">1만 원 이하 주문 비율</div><div class="v">${share(l12Small.length, last12Rows.length)}</div></div>
-<div class="kpi"><div class="k">연 절감 여력 (가정 포함)</div><div class="v">${man(saveTotal).replace("만", "")}<small>만원</small></div></div>
-</div>
-</header>
+// [순수 데이터] 쿠팡 4년 통계. index.html '순수 데이터' 탭 아래에 붙는다. 해석·조언 문장을 넣지 않는다.
+const stats = `<section class="bare"><h2>쿠팡 4년 통계 · ${months[0]} ~ ${months.at(-1)}</h2><p class="lede">월급 월 ${months.length}개월, 주문 ${inWin.length.toLocaleString()}건. 2023-01과 진행 중인 ${ym(TODAY)}은 기간이 모자라 뺐다. 쿠팡 주문목록에 표시된 금액(할인 전).</p></section>
 
 <section id="trend">
 <h2>월별 추이</h2>
-<p class="lede">막대가 월급 월(전월 25일~당월 24일) 지출, 파란 선이 12개월 이동평균이다. 빨간 막대는 평균보다 크게 튄 달이고 위에 그달 가장 큰 주문을 적었다.</p>
-<figure>${monthChart()}<figcaption>월 평균 ${won(mMean)}원, 표준편차 ${won(mSd)}원. 선형 추세 한 달 ${trend.b >= 0 ? '+' : ''}${won(trend.b)}원(R² ${trend.r2.toFixed(2)}): 달마다 흔들림이 추세보다 크다. 2023-01과 진행 중인 ${ym(TODAY)}은 뺐다.</figcaption></figure>
+<p class="lede">막대는 월급 월 지출, 파란 선은 12개월 이동평균. 빨간 막대는 평균보다 표준편차 1.5배 이상 높은 달(z ≥ 1.5)이고, 위에 그달 가장 큰 주문을 적었다.</p>
+<figure>${monthChart()}<figcaption>월 평균 ${won(mMean)}원, 표준편차 ${won(mSd)}원. 선형 추세 기울기 한 달 ${trend.b >= 0 ? '+' : ''}${won(trend.b)}원, R² ${trend.r2.toFixed(2)}.</figcaption></figure>
 <div class="three">
 <div><h3>월평균 지출</h3><figure>${miniBars(byYear.map(y => ({ k: yrLabel(y), v: y.avgM, tip: `${y.y} 월평균 ${won(y.avgM)}원` })), v => man(v))}</figure></div>
 <div><h3>한 달 주문 건수</h3><figure>${miniBars(byYear.map(y => ({ k: yrLabel(y), v: y.nM, tip: `${y.y} 한 달 ${y.nM.toFixed(1)}건` })), v => v.toFixed(0) + '건')}</figure></div>
 <div><h3>건당 평균 금액</h3><figure>${miniBars(byYear.map(y => ({ k: yrLabel(y), v: y.ticket, tip: `${y.y} 건당 평균 ${won(y.ticket)}원, 중앙값 ${won(y.med)}원` })), v => man(v))}</figure></div>
 </div>
-<p class="note">* 표시는 열두 달이 다 차지 않은 해(2023년 11개월, 2026년 ${Y['2026'] ? Y['2026'].months : 0}개월). 건수는 늘고 건당 금액은 그대로라는 게 한눈에 보인다.</p>
+<p class="note">* 열두 달이 다 차지 않은 해 (2023년 11개월, 2026년 ${Y['2026'] ? Y['2026'].months : 0}개월).</p>
 </section>
 
 <section id="where">
-<h2>어디서 늘었나</h2>
-<p class="lede">2023년 → 2025년 월평균 +${man(totalUp2325)}원. 주문 건수가 늘어서 ${man(decomp.byCount)}원, 건당 금액 변화로 ${decomp.byTicket >= 0 ? '+' : ''}${man(decomp.byTicket)}원이다. 비싼 걸 사서가 아니라 자주 사서 늘었다.</p>
-<figure>${divBars(g2325.filter(x => Math.abs(x.d) >= 3000).map(x => ({ k: x.c, v: x.d })), v => `${v >= 0 ? '+' : ''}${man(v)}원`)}<figcaption>카테고리별 월평균 변화, 2023 → 2025. 파랑은 증가, 회색은 감소.</figcaption></figure>
+<h2>카테고리 변화</h2>
+<p class="lede">2023년 → 2025년 월평균 차이 ${totalUp2325 >= 0 ? '+' : ''}${man(totalUp2325)}원 = 주문 건수 변화분 ${decomp.byCount >= 0 ? '+' : ''}${man(decomp.byCount)}원 + 건당 금액 변화분 ${decomp.byTicket >= 0 ? '+' : ''}${man(decomp.byTicket)}원.</p>
+<figure>${divBars(g2325.filter(x => Math.abs(x.d) >= 3000).map(x => ({ k: x.c, v: x.d })), v => `${v >= 0 ? '+' : ''}${man(v)}원`)}<figcaption>카테고리별 월평균 차이, 2023 → 2025. 파랑은 증가, 회색은 감소.</figcaption></figure>
 <h3>카테고리별 월평균, 연도별</h3>
-<figure>${catYearChart()}${legend(byYear.map(y => y.y), true)}<figcaption>색은 연도별(아래 범례). 오른쪽 숫자는 ${byYear.at(-1).y}년 월평균. 육아용품 첫 구매 ${firstBaby ? firstBaby.ds : '-'}. 분류는 cats.js 키워드 기준이며 '기타'가 최근 12개월의 ${share(catL12['기타'], l12Avg)}.</figcaption></figure>
+<figure>${catYearChart()}${legend(byYear.map(y => y.y), true)}<figcaption>오른쪽 숫자는 ${byYear.at(-1).y}년 월평균. 육아용품 첫 구매 ${firstBaby ? firstBaby.ds : '-'}. 분류는 cats.js 키워드 기준, '기타'는 최근 12개월의 ${share(catL12['기타'], l12Avg)}.</figcaption></figure>
 </section>
 
 <section id="when">
-<h2>언제 쓰나</h2>
+<h2>월급 주기와 요일</h2>
 <div class="two">
 <div>
-<h3>월급 주기</h3>
-<p class="lede">월급 후 1주 하루 평균 ${won(cycStats[0].m)}원, 나머지 ${won(cycStats[0].m - cycTest.diff)}원 (${pv(cycTest.p)}). ${cycTest.p < 0.05 ? '월급 직후에 더 쓴다.' : '월급 직후라고 더 쓰지는 않는다.'}</p>
+<h3>월급 주기 (하루 평균)</h3>
+<p class="lede">월급 후 1주 ${won(cycStats[0].m)}원, 나머지 기간 ${won(cycStats[0].m - cycTest.diff)}원. 차이 ${won(cycTest.diff)}원, ${pv(cycTest.p)}.</p>
 <figure>${ciBars(cycStats, it => it === cycStats[0])}</figure>
 </div>
 <div>
-<h3>요일</h3>
-<p class="lede">주말 하루 평균 ${won(mean(weekend))}원, 평일 ${won(mean(weekday))}원 (${pv(wk.p)}). ${wk.p < 0.05 ? '주말에 더 쓰는 건 우연이 아니다.' : '주말 차이는 우연일 수 있다.'}</p>
+<h3>요일 (하루 평균)</h3>
+<p class="lede">주말 ${won(mean(weekend))}원, 평일 ${won(mean(weekday))}원. 차이 ${won(wk.diff)}원(±${won(wk.ci)}), ${pv(wk.p)}.</p>
 <figure>${ciBars(dowStats, it => it.k === '토' || it.k === '일')}</figure>
 </div>
 </div>
-<p class="note">주문 없는 날은 0원으로 넣은 하루 평균. 막대 끝 가로선은 95% 신뢰구간, 검정은 Welch t-검정. 전체 ${days.length}일 중 주문한 날 ${orderDays}일(${share(orderDays, days.length)}).</p>
+<p class="note">주문 없는 날은 0원으로 넣은 하루 평균. 가로선은 95% 신뢰구간, 검정은 Welch t-검정(정규근사). 전체 ${days.length}일 중 주문한 날 ${orderDays}일(${share(orderDays, days.length)}).</p>
 </section>
 
 <section id="size">
 <h2>주문 크기</h2>
-<p class="lede">최근 12개월 1만 원 이하 주문은 ${l12Small.length}건. 건수로는 ${share(l12Small.length, last12Rows.length)}인데 금액으로는 ${share(sum(l12Small.map(r => r.price)), l12Total)}뿐이다. 작은 주문이 잦을수록 장바구니를 여는 횟수가 늘어난다.</p>
+<p class="lede">최근 12개월 1만 원 이하 주문 ${l12Small.length}건: 건수의 ${share(l12Small.length, last12Rows.length)}, 금액의 ${share(sum(l12Small.map(r => r.price)), l12Total)}.</p>
 <div class="two">
 <div><h3>건수 구성</h3><figure>${stack100(dist.map(d => ({ k: d.y, parts: d.n })), binLabels)}</figure></div>
 <div><h3>금액 구성</h3><figure>${stack100(dist.map(d => ({ k: d.y, parts: d.s })), binLabels)}</figure></div>
@@ -291,36 +312,80 @@ ${legend(binLabels)}
 
 <section id="repeat">
 <h2>반복 구매</h2>
-<p class="lede">최근 12개월 4회 이상 산 품목 상위 12개가 ${man(recurTotal)}원, 전체의 ${share(recurTotal, l12Total)}. 아래 회색 글자는 구매 간격. 간격이 일정하면 정기배송·대용량 후보다.</p>
+<p class="lede">최근 12개월 4회 이상 산 품목 상위 12개: ${man(recurTotal)}원, 쿠팡 지출의 ${share(recurTotal, l12Total)}. 회색 글자는 구매 간격 중앙값.</p>
 <figure>${hbars(recurring.map(r => ({ k: r.k, v: r.s, n: r.n, gap: r.gap, cat: r.cat, tip: `${r.k}\n${r.cat} · ${r.n}회 · ${won(r.s)}원\n구매 간격 중앙값 ${r.gap == null ? '-' : Math.round(r.gap) + '일'}` })), { labelW: 330, hiN: 3, sub: it => `${it.cat} · ${it.gap == null ? '' : Math.round(it.gap) + '일마다'}`, fmt: (v, it) => `${man(v)}원 · ${it.n}회` })}</figure>
+<p class="note">같은 날 같은 상품이 두 줄 이상인 경우 ${dups.length}건, 추가분 ${won(dupExtra)}원.</p>
 </section>
-
-<section id="save">
-<h2>줄일 여력</h2>
-<p class="lede">최근 12개월(${last12[0].m} ~ ${last12.at(-1).m}, ${man(l12Total)}원) 기준. 막대는 각 가정대로 했을 때 1년에 아끼는 돈이다.</p>
-<figure>${hbars(SAVE.map(s => ({ k: s.what, v: s.save, rule: s.rule, tip: `${s.what}\n근거: ${s.basis}, ${won(s.base)}원\n가정: ${s.rule}\n연 ${won(s.save)}원` })), { labelW: 330, hiN: SAVE.length, sub: it => it.rule })}</figure>
-<div class="total"><span>연 절감 여력 합계</span><strong>${man(saveTotal)}원</strong></div>
-<p class="note">항목끼리 일부 겹치므로(주말의 소액 주문은 두 항목에 다 들어간다) 합계는 상한에 가깝다. 따로, 같은 날 같은 상품이 두 줄 이상인 경우가 ${dups.length}건(추가분 ${won(dupExtra)}원) 있다. 실제 중복 주문인지 확인이 필요해 합계에서 뺐다.</p>
-${bigNoness.length ? `<h3>5만 원 이상 비필수 단건</h3><figure>${hbars(bigNoness.slice(0, 8).map(r => ({ k: r.item.split(',')[0], v: r.price, tip: `${r.ds} ${r.item}\n${won(r.price)}원`, ds: r.ds, cat: r.cat })), { labelW: 330, sub: it => `${it.ds} · ${it.cat}` })}</figure>` : ''}
-</section>
-
-<section id="fix">
-<h2>보완할 점</h2>
-<figure>${budgetChart()}<figcaption>최근 12개월과 제안 예산(최근 12개월 중앙값). 빨강은 예산을 넘은 달, ${overBudget.length}번.</figcaption></figure>
-<ol class="points">
-<li><b>월 ${man(budget)}원을 예산선으로 쓴다.</b> 분석기(index.html)의 월 예산 칸에 넣으면 넘은 달이 바로 표시된다.</li>
-<li><b>주말을 관리한다.</b> ${wk.p < 0.05 ? '주말 지출은 통계적으로 확실히 높다. 주말 장보기 목록을 금요일에 정하면 즉흥 구매가 준다.' : '주말 차이는 뚜렷하지 않다.'} ${cycTest.p < 0.05 ? '월급 직후 지출도 높다.' : '월급 주기 효과는 약하다.'}</li>
-<li><b>육아·식비는 줄이기보다 단가를 낮춘다.</b> 기저귀·우유·이유식 같은 필수 반복 품목은 정기배송 할인, 대용량, 행사 때 몰아 사기.</li>
-<li><b>실제 결제액을 맞춘다.</b> 이 리포트는 할인 전 금액이고 취소·반품이 빠지지 않았다. '취소/반품/교환/환불내역'을 수집해 빼야 진짜 지출이 나온다.</li>
-<li><b>은행 내역과 합친다.</b> 쿠팡은 전체 지출의 일부다. 카카오뱅크 내역을 합쳐야 전체 과소비 지점이 보인다.</li>
-<li><b>분류를 다듬는다.</b> '기타'가 최근 12개월의 ${share(catL12['기타'], l12Avg)}. cats.js에 키워드를 더하면 카테고리 분석이 정확해진다.</li>
-</ol>
-</section>
-<div class="report-notes">
-<p>자료: data/coupang_2023~2026.md (csv를 요약 없이 옮긴 원문 표, 쿠팡 주문목록에 표시된 상품 금액). 데이터는 이 PC 밖으로 보내지 않는다. 다시 만들기: node report.js</p>
-<p>방법: 월급 월 = 전월 25일~당월 24일. 하루 평균에는 주문 없는 날을 0원으로 넣었다. 신뢰구간은 평균 ± 1.96 × 표준오차. 절감액은 그래프에 적은 가정으로 계산했다. 그래프에 마우스를 올리면 자세한 값이 보인다.</p>
-</div>
 `;
 
-fs.writeFileSync(path.join(__dirname, 'report_body.js'), `// report.js 가 만든 파일. 직접 고치지 말 것. index.html 이 불러온다.\nwindow.REPORT_HTML = ${JSON.stringify(body)};\n`);
-console.log(`report_body.js: ${months.length}개월, ${inWin.length}건, 최근12개월 월평균 ${won(l12Avg)}, 절감 ${won(saveTotal)}, 기타 ${share(catL12['기타'], l12Avg)}`);
+// [AI 분석] Claude 가 ${asOf} 데이터를 보고 쓴 판단과 소비 가이드. 숫자는 매번 다시 계산되지만 판단 문장은 이 날짜 기준이다.
+// 데이터 건수가 AI_BASIS 와 달라지면 '다시 분석 필요' 안내가 뜬다 → 그때 AI 에게 다시 분석을 맡기고 이 문장들을 고친다.
+const AI_BASIS = { date: '2026-11-08', coupang: 2269, bank: 569 };
+const stale = SD.coupang.length !== AI_BASIS.coupang || SD.bank.length !== AI_BASIS.bank;
+const report = `<header class="top">
+${stale ? `<p class="total" style="margin-top:0"><span>이 분석은 ${AI_BASIS.date} 데이터(쿠팡 ${AI_BASIS.coupang.toLocaleString()}건, 은행 ${AI_BASIS.bank}건)로 쓴 것입니다. 지금 데이터는 쿠팡 ${SD.coupang.length.toLocaleString()}건, 은행 ${SD.bank.length}건이라 판단 문장이 맞지 않을 수 있습니다. AI에게 다시 분석을 요청하세요.</span></p>` : ''}
+<p class="note">Claude(추론형 AI)가 ${AI_BASIS.date}에 쿠팡 4년치와 카카오뱅크 1년치를 보고 쓴 의견입니다. 숫자는 데이터에서 다시 계산되지만, 해석·우선순위·예산 조정률은 AI의 판단입니다. 계산 결과만 보려면 '순수 데이터' 탭을 보세요.</p>
+<h1>지금 보이는 소비는 전체의 절반이 안 됩니다</h1>
+<p class="verdict">최근 12개월 쿠팡과 카카오뱅크로 확인되는 소비는 월 <b>${man(allAvg)}원</b>입니다. 그런데 같은 기간 카드대금으로 빠져나간 돈이 월 <b>${man(cardBills / 12)}원</b>이라, 진짜 큰 지출은 아직 보이지 않습니다. 보이는 범위 안에서는 육아가 가장 크고, 장보기가 너무 잘게 쪼개져 있습니다.</p>
+<div class="kpis figs">
+<div class="kpi accent"><div class="k">보이는 소비 (월평균)</div><div class="v">${man(allAvg).replace('만', '')}<small>만원</small></div><div class="d">쿠팡 ${man(coupangL12 / 12)} + 은행 ${man(sum(bankOut.map(r => r.price)) / 12)}</div></div>
+<div class="kpi"><div class="k">안 보이는 카드대금 (월평균)</div><div class="v">${man(cardBills / 12).replace('만', '')}<small>만원</small></div><div class="d">현대·KB 카드 1년 ${man(cardBills)}원</div></div>
+<div class="kpi"><div class="k">육아 (월평균)</div><div class="v">${man(catSum('육아')).replace('만', '')}<small>만원</small></div><div class="d">보이는 소비의 ${share(catSum('육아'), allAvg)}</div></div>
+<div class="kpi"><div class="k">AI 제안 예산 (보이는 범위)</div><div class="v">${man(planNext).replace('만', '')}<small>만원</small></div><div class="d">지금보다 월 ${man(planCur - planNext)}원 적게</div></div>
+</div>
+</header>
+
+<section>
+<h2>진단</h2>
+<ol class="points">
+<li><b>가장 큰 공백은 카드입니다.</b> 카카오뱅크에서 현대카드·KB카드로 1년간 ${man(cardBills)}원이 나갔습니다. 쿠팡 결제 일부가 이 안에 섞여 있을 수 있지만, 그걸 빼도 한 달 100만 원 넘는 돈이 어디에 쓰였는지 지금 데이터로는 알 수 없습니다. 과소비가 있다면 여기일 가능성이 가장 큽니다.</li>
+<li><b>지출이 늘어난 건 대부분 아이가 크면서입니다.</b> 쿠팡 2023→2025 증가분의 ${share(babyUp, totalUp2325)}가 육아입니다. 기저귀·분유에서 이유식·유아식, 어린이집으로 옮겨 가는 구조적인 증가라 '낭비'로 보기는 어렵습니다. 줄일 대상이 아니라 단가를 관리할 대상입니다.</li>
+<li><b>장보기가 너무 잘게 쪼개져 있습니다.</b> 마트·슈퍼 ${groceryStores}곳과 쿠팡 식품을 합쳐 1년에 ${groceryVisits}번 장을 봤고, 1년 중 ${payDays}일 무언가를 결제했습니다. 식비는 월 ${man(catSum(FOOD))}원입니다. 자주 사는 습관은 계획에 없던 물건을 같이 담게 만듭니다.</li>
+<li><b>작은 결제가 절반입니다.</b> 1만 원 이하 결제가 ${allSmall.length}건으로 전체의 ${share(allSmall.length, allL12.length)}입니다. 한 건은 작아도 장바구니를 여는 횟수 자체가 지출을 늘립니다.</li>
+<li><b>페이 충전은 사용처가 안 보입니다.</b> 네이버페이 등 충전이 ${payCharge.length}번, ${man(payChargeSum)}원입니다. 충전한 돈으로 무엇을 샀는지는 이 데이터에 없어서 관리가 어렵습니다.</li>
+<li><b>주말보다는 '횟수'가 문제입니다.</b> 쿠팡만 보면 주말에 더 쓰지만(${pv(wk.p)}), 은행까지 합치면 주말 비중은 ${share(sum(allL12.filter(r => [0, 6].includes(r.d.getDay())).map(r => r.price)), allTotal)}로 일주일 중 주말 비율(29%)과 큰 차이가 없습니다.</li>
+</ol>
+</section>
+
+<section>
+<h2>소비 가이드</h2>
+<p class="lede">효과가 크고 바로 할 수 있는 순서입니다.</p>
+<ol class="points">
+<li><b>현대·KB 카드 이용내역을 받아 이 분석에 넣기.</b> 지금 판단은 전체 소비의 절반도 안 되는 범위에서 내린 것입니다. 카드 내역이 들어오면 진짜 과소비 지점을 찾을 수 있습니다.</li>
+<li><b>장보기는 주 2회, 정해진 요일에.</b> 목록을 먼저 쓰고 한 곳에서 몰아 삽니다. 쿠팡은 반복해서 사는 필수품만 남깁니다.</li>
+<li><b>육아 필수품은 정기배송·대용량으로.</b> 기저귀·우유·이유식처럼 간격이 일정한 품목은 가격을 비교해 정기배송으로 돌립니다. 양은 그대로, 단가만 낮춥니다.</li>
+<li><b>페이 충전 대신 카드로 바로 결제.</b> 쓴 곳이 기록으로 남아야 다음 분석에서 보입니다.</li>
+<li><b>5만 원이 넘는 비필수품은 3일 기다리기.</b> 최근 12개월 전자·가전 같은 비필수 단건이 ${bigNoness.length}건, ${man(sum(bigNoness.map(r => r.price)))}원이었습니다.</li>
+<li><b>작은 물건은 장바구니에 담아 두고 장보기 날 한 번에 결제.</b> 결제 횟수만 줄여도 계획 밖 구매가 같이 줄어듭니다.</li>
+</ol>
+</section>
+
+<section>
+<h2>AI 제안 월 예산</h2>
+<p class="lede">보이는 범위(쿠팡+카카오뱅크) 기준. 회색 막대는 최근 12개월 월평균, 파란 막대는 AI가 제안하는 예산입니다. 조정률은 AI의 판단입니다.</p>
+<figure>${planChart()}</figure>
+<div class="total"><span>제안 예산 합계 (월)</span><strong>${man(planNext)}원</strong></div>
+<p class="note">지금 월평균 ${man(planCur)}원에서 월 ${man(planCur - planNext)}원, 1년 ${man((planCur - planNext) * 12)}원을 줄이는 안입니다. '순수 데이터' 탭의 월 예산 칸에 넣으면 넘은 달을 볼 수 있습니다. 카드 내역이 들어오면 예산을 다시 짜야 합니다.</p>
+</section>
+
+<section>
+<h2>쿠팡 절감 시나리오</h2>
+<p class="lede">쿠팡 최근 12개월(${last12[0].m} ~ ${last12.at(-1).m}, ${man(l12Total)}원) 기준. 각 줄 아래 회색 글자가 AI가 정한 가정입니다.</p>
+<figure>${hbars(SAVE.map(s => ({ k: s.what, v: s.save, rule: s.rule, tip: `${s.what}\n근거: ${s.basis}, ${won(s.base)}원\n가정: ${s.rule}\n연 ${won(s.save)}원` })), { labelW: 330, hiN: SAVE.length, sub: it => it.rule })}</figure>
+<div class="total"><span>연 절감 여력 합계 (가정)</span><strong>${man(saveTotal)}원</strong></div>
+<p class="note">항목끼리 일부 겹치므로(주말의 소액 주문은 두 항목에 다 들어간다) 합계는 상한에 가깝다.</p>
+</section>
+
+<section>
+<h2>이 분석의 한계</h2>
+<ol class="points">
+<li><b>카드 내역이 없습니다.</b> 가장 큰 한계입니다. 위 진단 1번을 보세요.</li>
+<li><b>쿠팡 금액은 할인 전이고 취소·반품이 빠지지 않았습니다.</b> 실제 결제액은 이보다 적습니다.</li>
+<li><b>은행 내역은 1년치뿐입니다.</b> 쿠팡처럼 몇 년치를 비교할 수 없습니다.</li>
+<li><b>카테고리는 상품명·상호 키워드로 나눴습니다.</b> '기타'로 남은 거래가 있고, 잘못 분류된 거래도 있을 수 있습니다.</li>
+</ol>
+</section>
+`;
+
+fs.writeFileSync(path.join(__dirname, 'report_body.js'), `// report.js 가 만든 파일. 직접 고치지 말 것. index.html 이 불러온다.\n// REPORT_HTML: 'AI 분석' 탭 (AI 판단·가이드), STATS_HTML: '순수 데이터' 탭 아래 쿠팡 4년 통계 (계산 결과만)\nwindow.REPORT_HTML = ${JSON.stringify(report)};\nwindow.STATS_HTML = ${JSON.stringify(stats)};\n`);
+console.log(`report_body.js: 보이는 소비 월 ${won(allAvg)}, 카드대금 월 ${won(cardBills / 12)}, 제안 예산 월 ${won(planNext)}, 쿠팡 절감 ${won(saveTotal)}${stale ? ' (AI 판단 다시 필요)' : ''}`);
