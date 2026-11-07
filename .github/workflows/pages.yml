@@ -1,0 +1,42 @@
+name: 소비 패턴 페이지 배포
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:         # 수동 실행 버튼
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      # 공개 사이트에는 가린 데이터(data.public.js)를 data.js 라는 이름으로 넣는다
+      - name: 사이트 파일 모으기
+        run: |
+          mkdir _site
+          cp index.html theme.css cats.js report_body.js _site/
+          cp data.public.js _site/data.js
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: GitHub Pages 배포
+        id: deploy
+        uses: actions/deploy-pages@v4

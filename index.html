@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>소비 패턴</title>
+<meta name="description" content="미리 분석한 카카오뱅크·쿠팡 내역을 골라 보면서 월급날 기준 이번 달 지출, 월별·카테고리별·요일별 지출을 그래프로 보여주는 로컬 대시보드">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<script src="data.js"></script>
+<script src="report_body.js"></script>
+<script src="cats.js"></script>
+<link rel="stylesheet" href="theme.css">
+<style>
+/* 분석기 화면에만 쓰는 것. 색·글꼴·카드·차트는 theme.css */
+.pagehead { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: var(--space-md) var(--space-xl); padding-block: var(--space-xl) var(--space-lg); }
+.pagehead .sub { margin-top: var(--space-2xs); font-size: var(--text-sm); color: var(--color-muted); }
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-sm); }
+.seg { display: inline-flex; padding: var(--space-2xs); border-radius: var(--radius-pill); background: var(--color-paper-3); }
+.seg label { position: relative; }
+.seg input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
+.seg span { display: inline-flex; align-items: center; min-height: 36px; padding: 0 var(--space-md); border-radius: var(--radius-pill); font-size: var(--text-sm); font-weight: 600; color: var(--color-muted); cursor: pointer; transition: background-color var(--dur) var(--ease-out), color var(--dur) var(--ease-out), box-shadow var(--dur) var(--ease-out); }
+.seg label:hover span { color: var(--color-ink); }
+.seg label:active span { background: var(--color-rule-2); }
+.seg input:checked + span { background: var(--color-rule-2); color: var(--color-ink); box-shadow: var(--shadow-card); }
+.seg input:focus-visible + span { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+.seg input:disabled + span { opacity: 0.4; cursor: not-allowed; }
+.pill { min-height: 44px; padding: 0 var(--space-md); border: 0; border-radius: var(--radius-pill); background: var(--color-card); box-shadow: var(--shadow-card); color: var(--color-ink); font: 600 var(--text-sm) var(--font-body); font-variant-numeric: tabular-nums; transition: box-shadow var(--dur) var(--ease-out); }
+.pill:hover { box-shadow: 0 0 0 1px var(--color-rule-2), var(--shadow-card); }
+.pill:focus { outline: none; box-shadow: 0 0 0 2px var(--color-focus); }
+.pill:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+input.pill { width: 170px; }
+input.pill::placeholder { color: var(--color-muted); font-weight: 500; }
+.coverage { margin-bottom: var(--space-md); font-size: var(--text-xs); color: var(--color-muted); max-width: none; }
+.coverage b { color: var(--color-warn); font-weight: 600; }
+.main { display: grid; grid-template-columns: minmax(0, 1.75fr) minmax(0, 1fr); gap: var(--gap); }
+.main > section { margin-top: var(--gap); }
+.donut { display: grid; grid-template-columns: minmax(0, 170px) minmax(0, 1fr); gap: var(--space-lg); align-items: center; margin-top: var(--space-md); }
+.catlist { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-sm); font-size: var(--text-sm); }
+.catlist li { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: center; gap: var(--space-xs); }
+.catlist i { width: 10px; height: 10px; border-radius: var(--radius-pill); }
+.catlist .n { color: var(--color-ink); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.catlist .p { color: var(--color-ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+.catlist .m { grid-column: 2 / 4; margin-top: calc(-1 * var(--space-2xs)); color: var(--color-muted); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
+.catlist .s0 { background: var(--c0); } .catlist .s1 { background: var(--c1); } .catlist .s2 { background: var(--c2); } .catlist .s3 { background: var(--c3); } .catlist .s4 { background: var(--c4); } .catlist .s5 { background: var(--c5); }
+.tabs { display: inline-flex; padding: var(--space-2xs); border-radius: var(--radius-pill); background: var(--color-paper-3); }
+.tabs button { min-height: 36px; padding: 0 var(--space-md); border: 0; border-radius: var(--radius-pill); background: none; color: var(--color-muted); font: 600 var(--text-sm) var(--font-body); cursor: pointer; transition: background-color var(--dur) var(--ease-out), color var(--dur) var(--ease-out); }
+.tabs button:hover { color: var(--color-ink); }
+.tabs button:active { background: var(--color-rule); }
+.tabs button[aria-selected="true"] { background: var(--color-rule-2); color: var(--color-ink); }
+.tabs button:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+#signals { margin-top: var(--gap); }
+#signals > h2 { margin: var(--space-xs) 0 var(--space-md); }
+.state { padding: var(--space-xl); background: var(--color-card); border-radius: var(--radius-card); box-shadow: var(--shadow-card); }
+.state p { margin-top: var(--space-xs); }
+.state.error h2 { color: var(--color-error); }
+@media (max-width: 64rem) { .main { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 30rem) { .donut { grid-template-columns: minmax(0, 1fr); } .donut svg { max-width: 200px; margin-inline: auto; } }
+</style></head><body>
+<div class="topbar"><div class="wrap"><strong>소비 패턴</strong><nav class="tabs" role="tablist" aria-label="화면"><button type="button" role="tab" data-view="pattern" aria-selected="true" aria-controls="view-pattern">패턴 분석</button><button type="button" role="tab" data-view="report" aria-selected="false" aria-controls="view-report">쿠팡 4년 리포트</button></nav></div></div>
+
+<main class="wrap" id="view-pattern" role="tabpanel">
+<div class="pagehead">
+  <div>
+    <h1>얼마나, 어디에 썼을까</h1>
+    <p class="sub">월급날(25일) 기준으로 나눴습니다. 데이터는 이 PC 안에서만 계산합니다.</p>
+  </div>
+  <form class="controls" id="controls" aria-label="분석 범위">
+    <div class="seg" role="radiogroup" aria-label="자료">
+      <label><input type="radio" name="src" value="both" checked><span>전체</span></label>
+      <label><input type="radio" name="src" value="coupang"><span>쿠팡</span></label>
+      <label><input type="radio" name="src" value="bank"><span>카카오뱅크</span></label>
+    </div>
+    <select class="pill" name="period" id="period" aria-label="기간"></select>
+    <input class="pill" type="number" name="budget" id="budget" inputmode="numeric" min="0" step="10000" placeholder="월 예산 (원)" aria-label="월 예산 (원)">
+  </form>
+</div>
+<p class="coverage" id="coverage" aria-live="polite"></p>
+
+<div id="out" aria-live="polite">
+  <div class="state error">
+    <h2 class="h3">분석할 데이터가 없습니다</h2>
+    <p>data.js를 찾지 못했습니다. 프로젝트 폴더에서 <b>node build_data.js</b>를 실행한 뒤 이 페이지를 새로고침하세요.</p>
+  </div>
+</div>
+</main>
+<main class="wrap" id="view-report" role="tabpanel" hidden></main>
+
+<footer><div class="wrap"><p>카테고리 키워드: 쿠팡 상품은 cats.js, 은행 거래는 cats.js의 BANK_CATS. 데이터 갱신: node build_data.js (패턴 분석), node report.js (리포트)</p></div></footer>
+<div id="tip" role="tooltip"></div>
+
+<script>
+// 카테고리 키워드(쿠팡 COUPANG_CATS, 은행 BANK_CATS)와 공개용 가리기 규칙은 cats.js 에 있다.
+// 은행 제외 규칙(분석 규칙 2)과 은행 카테고리는 build_data.js 가 data.js 를 만들 때 이미 적용했다.
+
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const num = v => typeof v === 'number' ? v : Number(String(v ?? '').replace(/[^\d.-]/g, '')) || 0;
+function toDate(v) {
+  const m = String(v ?? '').match(/(\d{4})[.\-\/]+(\d{1,2})[.\-\/]+(\d{1,2})\D*(?:(\d{1,2}):(\d{2}))?/);
+  return m ? new Date(m[1], m[2] - 1, m[3], m[4] || 0, m[5] || 0) : null;
+}
+
+// data.js(window.SPEND_DATA) → 거래 목록. 쿠팡: [일자, 상품명, 금액], 은행: [일시, 구분, 금액, 카테고리, 내용]
+const DATA = window.SPEND_DATA || null;
+const COUPANG = DATA ? DATA.coupang.map(([d, item, price]) => ({ d: toDate(d), amt: -Math.abs(price), desc: item, src: '쿠팡' })) : [];
+const BANK = DATA ? DATA.bank.map(([d, kind, amt, cat, desc]) => ({ d: toDate(d), amt: kind === '출금' && amt > 0 ? -amt : amt, cat, desc: String(desc), src: '카카오뱅크' })) : [];
+const span = list => list.length ? [list.reduce((a, t) => t.d < a ? t.d : a, list[0].d), list.reduce((a, t) => t.d > a ? t.d : a, list[0].d)] : null;
+const ds = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+const won = n => Math.round(n).toLocaleString('ko-KR') + '원';
+const manN = n => { const v = n / 10000; return v >= 100 ? Math.round(v).toLocaleString('ko-KR') : v.toFixed(1).replace(/\.0$/, ''); };
+const man = n => manN(n) + '만';
+const pct = (a, b) => Math.round(a / b * 100) + '%';
+// 월급날(25일) 기준: 25일부터는 다음 달 소비로 센다. 예) 5/25~6/24 = 6월
+const ym = d => { const x = new Date(d.getFullYear(), d.getMonth() + (d.getDate() >= 25 ? 1 : 0), 1); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}`; };
+const pmLabel = pm => `${+pm.slice(5)}월`;
+const pmRange = pm => { const y = +pm.slice(0, 4), m = +pm.slice(5); const p = m === 1 ? 12 : m - 1; return `${p}/25~${m}/24`; };
+const sumOf = list => list.reduce((s, t) => s - t.amt, 0);
+function sumBy(list, key) {
+  const m = {};
+  for (const t of list) { const k = key(t); m[k] = m[k] || { sum: 0, cnt: 0 }; m[k].sum += -t.amt; m[k].cnt++; }
+  return Object.entries(m).sort((a, b) => b[1].sum - a[1].sum);
+}
+const niceMax = v => { const p = 10 ** Math.floor(Math.log10(v || 1)); return Math.ceil(v / p / 2.5) * 2.5 * p; };
+// 눈금 간격이 50만·100만처럼 딱 떨어지게 4·5·3등분 중 고른다 (250만을 4등분하면 62.5만이 나오므로)
+const ticks = max => { const d = [4, 5, 3, 2].find(d => { const s = max / d, p = 10 ** Math.floor(Math.log10(s)); return [1, 2, 2.5, 5, 10].some(k => Math.abs(s / p - k) < 1e-9); }) || 4; return Array.from({ length: d + 1 }, (_, i) => i / d); };
+
+// ---------- 차트 (정적 SVG 문자열, 색은 CSS 클래스) ----------
+// 월별 막대: 이번 달은 파랑, 예산(없으면 평균의 120%)을 넘은 달은 빨강, 평균선·예산선 점선
+function monthChart(months, avg, budget, thisPm) {
+  const W = 760, H = 300, L = 44, R = 8, T = 24, B = 30;
+  const max = niceMax(Math.max(...months.map(m => m[1].sum), budget || 0));
+  const n = months.length, step = (W - L - R) / n, bw = Math.max(4, Math.min(28, step * 0.62));
+  const x = i => L + step * i + step / 2, y = v => T + (H - T - B) * (1 - v / max);
+  const limit = budget || avg * 1.2;
+  let s = ticks(max).map(f => `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(max * f)}" y2="${y(max * f)}"/><text class="ax" x="${L - 8}" y="${y(max * f) + 4}" text-anchor="end">${f ? man(max * f) : '0'}</text>`).join('');
+  s += months.map(([k, v], i) => { const cls = k === thisPm ? 'hi' : v.sum > limit ? 'over' : ''; return `<g data-tip="${k} (${pmRange(k)})\n${won(v.sum)} · ${v.cnt}건"><rect class="hit" x="${x(i) - step / 2}" y="${T}" width="${step}" height="${H - T - B}"/><rect class="b ${cls}" x="${x(i) - bw / 2}" y="${y(v.sum)}" width="${bw}" height="${Math.max(0, y(0) - y(v.sum))}" rx="${Math.min(6, bw / 3)}"/></g>`; }).join('');
+  const every = Math.max(1, Math.ceil(n / 12));
+  s += months.map(([k], i) => (n <= 13 || k.endsWith('-01') || i % every === 0) && (n <= 13 || k.endsWith('-01')) ? `<text class="ax" x="${x(i)}" y="${H - 8}" text-anchor="middle">${k.endsWith('-01') && n > 13 ? k.slice(0, 4) : pmLabel(k)}</text>` : '').join('');
+  s += `<line class="ref" x1="${L}" x2="${W - R}" y1="${y(avg)}" y2="${y(avg)}"/><text class="reflbl" x="${W - R}" y="${y(avg) - 7}" text-anchor="end">평균 ${man(avg)}원</text>`;
+  if (budget) s += `<line class="ref-warn" x1="${L}" x2="${W - R}" y1="${y(budget)}" y2="${y(budget)}"/><text class="reflbl warn" x="${L + 6}" y="${y(budget) - 7}">예산 ${man(budget)}원</text>`;
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="월별 지출 막대 그래프">${s}</svg>`;
+}
+
+// 카테고리 도넛 (상위 5개 + 그 외)
+function donut(parts, total) {
+  const R = 74, C = 2 * Math.PI * R, gap = parts.length > 1 ? 3 : 0; let off = 0;
+  const rings = parts.map((p, j) => { const len = Math.max(0, C * p.v / total - gap); const r = `<g data-tip="${esc(p.k)}\n${won(p.v)} · ${pct(p.v, total)}"><circle class="ring s${j}" cx="90" cy="90" r="${R}" stroke-dasharray="${len} ${C - len}" stroke-dashoffset="${-off}" transform="rotate(-90 90 90)"/></g>`; off += C * p.v / total; return r; }).join('');
+  return `<svg viewBox="0 0 180 180" role="img" aria-label="카테고리 구성 도넛"><circle class="ring-track" cx="90" cy="90" r="${R}"/>${rings}<text class="ring-big" x="90" y="92" text-anchor="middle">${manN(total)}</text><text class="ring-sub" x="90" y="112" text-anchor="middle">만원</text></svg>`;
+}
+
+// 월별 카테고리 누적 막대 (상위 5개 + 그 외)
+function stackChart(spend, monthKeys, cats) {
+  const W = 1100, H = 260, L = 44, R = 8, T = 12, B = 30;
+  const totals = monthKeys.map(m => sumOf(spend.filter(t => t.pm === m)));
+  const max = niceMax(Math.max(...totals));
+  const n = monthKeys.length, step = (W - L - R) / n, bw = Math.max(4, Math.min(26, step * 0.62));
+  const x = i => L + step * i + step / 2, h = v => (H - T - B) * v / max;
+  let s = [0, .5, 1].map(f => `<line class="grid" x1="${L}" x2="${W - R}" y1="${T + h(max * (1 - f))}" y2="${T + h(max * (1 - f))}"/><text class="ax" x="${L - 8}" y="${T + h(max * (1 - f)) + 4}" text-anchor="end">${f ? man(max * f) : '0'}</text>`).join('');
+  monthKeys.forEach((m, i) => {
+    const rs = spend.filter(t => t.pm === m);
+    const parts = cats.map(c => sumOf(rs.filter(t => (cats.slice(0, -1).includes(t.cat) ? t.cat : '그 외') === c)));
+    let yy = H - B;
+    const tip = `${m}\n` + cats.map((c, j) => parts[j] ? `${c} ${man(parts[j])}원` : '').filter(Boolean).join('\n');
+    s += `<g data-tip="${esc(tip)}"><rect class="hit" x="${x(i) - step / 2}" y="${T}" width="${step}" height="${H - T - B}"/>` + parts.map((v, j) => { if (!v) return ''; yy -= h(v); return `<rect class="s${j}" x="${x(i) - bw / 2}" y="${yy}" width="${bw}" height="${Math.max(0, h(v) - 1)}"/>`; }).join('') + '</g>';
+  });
+  s += monthKeys.map((k, i) => (n <= 13 || k.endsWith('-01')) ? `<text class="ax" x="${x(i)}" y="${H - 8}" text-anchor="middle">${n > 13 ? k.slice(0, 4) : pmLabel(k)}</text>` : '').join('');
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="월별 카테고리 누적 막대">${s}</svg>`;
+}
+
+// 가로 막대 (항목 이름, 막대, 금액)
+function hbars(entries, total, { limit = 10, labelW = 200, hiFirst = 0 } = {}) {
+  const rows = entries.slice(0, limit), W = 540, rowH = 34, R = 110, H = rows.length * rowH;
+  const max = Math.max(...rows.map(e => e[1].sum), 1);
+  const maxCh = Math.floor((labelW - 12) / 13), cut = s => s.length > maxCh ? s.slice(0, maxCh - 1) + '…' : s;
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="항목별 지출 가로 막대">` + rows.map(([k, v], i) => {
+    const y = i * rowH, w = (W - labelW - R) * v.sum / max;
+    return `<g data-tip="${esc(k)}\n${won(v.sum)} · ${v.cnt}건 · 전체의 ${pct(v.sum, total)}"><rect class="hit" x="0" y="${y}" width="${W}" height="${rowH}"/><text class="lbl" x="0" y="${y + 21}">${esc(cut(k))}</text><rect class="b ${i < hiFirst ? 'hi' : ''}" x="${labelW}" y="${y + 9}" width="${Math.max(4, w)}" height="16" rx="8"/><text class="val" x="${labelW + w + 8}" y="${y + 21}">${man(v.sum)}원</text></g>`;
+  }).join('') + `</svg>`;
+}
+
+// 세로 막대 (요일, 금액대)
+function vbars(items, { hi = () => false, sub = () => '' } = {}) {
+  const W = 520, H = 230, T = 24, B = 42, n = items.length, step = W / n, bw = Math.min(40, step * 0.55);
+  const max = Math.max(...items.map(i => i.v), 1), y = v => T + (H - T - B) * (1 - v / max);
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="세로 막대 그래프">` + items.map((it, i) => {
+    const cx = step * i + step / 2;
+    return `<g data-tip="${esc(it.tip)}"><rect class="hit" x="${cx - step / 2}" y="0" width="${step}" height="${H}"/><rect class="b ${hi(it) ? 'hi' : ''}" x="${cx - bw / 2}" y="${y(it.v)}" width="${bw}" height="${Math.max(0, y(0) - y(it.v))}" rx="8"/><text class="val" x="${cx}" y="${y(it.v) - 7}" text-anchor="middle">${esc(it.top)}</text><text class="lbl" x="${cx}" y="${H - 20}" text-anchor="middle">${esc(it.k)}</text><text class="ax" x="${cx}" y="${H - 4}" text-anchor="middle">${esc(sub(it))}</text></g>`;
+  }).join('') + `</svg>`;
+}
+
+// ---------- 화면 ----------
+const out = document.getElementById('out');
+const form = document.getElementById('controls'), coverage = document.getElementById('coverage');
+
+// 화면 탭: 패턴 분석 / 쿠팡 4년 리포트. 리포트는 report.js 가 만든 report_body.js(window.REPORT_HTML)를 처음 열 때 넣는다
+const views = { pattern: document.getElementById('view-pattern'), report: document.getElementById('view-report') };
+const tabs = [...document.querySelectorAll('.tabs button')];
+let currentView = 'pattern';
+function showView(v) {
+  currentView = views[v] ? v : 'pattern';
+  for (const [k, el] of Object.entries(views)) el.hidden = k !== currentView;
+  tabs.forEach(b => b.setAttribute('aria-selected', String(b.dataset.view === currentView)));
+  if (currentView === 'report' && !views.report.innerHTML) views.report.innerHTML = window.REPORT_HTML || '<div class="state error" style="margin-top:var(--space-xl)"><h2 class="h3">리포트가 없습니다</h2><p>프로젝트 폴더에서 <b>node report.js</b>를 실행한 뒤 새로고침하세요.</p></div>';
+}
+tabs.forEach(b => b.addEventListener('click', () => { showView(b.dataset.view); writeState(); scrollTo(0, 0); }));
+
+// 선택값은 주소(#view=..&src=..&period=..&budget=..)에 남겨서 새로고침해도 유지한다
+function readState() {
+  const h = new URLSearchParams(location.hash.slice(1));
+  showView(h.get('view'));
+  if (h.get('src')) { const r = form.querySelector(`input[name=src][value="${h.get('src')}"]`); if (r) r.checked = true; }
+  if (h.get('period') && [...form.period.options].some(o => o.value === h.get('period'))) form.period.value = h.get('period');
+  if (h.get('budget')) form.budget.value = h.get('budget');
+}
+function writeState() {
+  const p = new URLSearchParams({ view: currentView, src: form.src.value, period: form.period.value });
+  if (form.budget.value) p.set('budget', form.budget.value);
+  history.replaceState(null, '', '#' + p);
+}
+
+function run() {
+  if (!DATA) return;
+  writeState();
+  const src = form.src.value, period = form.period.value;
+  const bankAll = src === 'coupang' ? [] : BANK, coupangAll = src === 'bank' ? [] : COUPANG;
+  const pool = [...bankAll.filter(t => t.amt < 0), ...coupangAll].map(t => ({ ...t, pm: ym(t.d), cat: t.src === '쿠팡' ? classifyItem(t.desc) : t.cat }));
+  const pms = [...new Set(pool.map(t => t.pm))].sort();
+  const keep = period === 'recent' ? new Set(pms.slice(-12)) : null;
+  const inPeriod = pm => period === 'all' || (keep ? keep.has(pm) : pm.startsWith(period));
+  const spend = pool.filter(t => inPeriod(t.pm));
+  const bank = bankAll.filter(t => inPeriod(ym(t.d)));
+  const coupang = spend.filter(t => t.src === '쿠팡');
+  const bankSpend = spend.filter(t => t.src === '카카오뱅크');
+  const income = bank.filter(t => t.amt > 0).reduce((s, t) => s + t.amt, 0);
+
+  // 자료 범위 안내: 두 자료의 기간이 달라서, 은행이 없는 달이 섞이면 알려 준다
+  const bs = span(BANK), cs = span(COUPANG);
+  let cov = `쿠팡 ${cs ? ds(cs[0]) + '~' + ds(cs[1]) : '-'} ${COUPANG.length.toLocaleString()}건 · 카카오뱅크 ${bs ? ds(bs[0]) + '~' + ds(bs[1]) : '-'} ${DATA.bankTotal}건(분석 규칙으로 ${DATA.bankTotal - BANK.length}건 제외) · ${DATA.built} 갱신`;
+  if (src === 'both' && bs && spend.some(t => t.d < bs[0])) cov += ` · <b>${ym(bs[0])} 이전은 쿠팡만 들어 있습니다</b>`;
+  coverage.innerHTML = cov;
+
+  if (!spend.length) { out.innerHTML = '<div class="state"><h2 class="h3">이 범위에는 지출이 없습니다</h2><p>자료나 기간을 바꿔 보세요. 카카오뱅크는 2025년 11월부터만 있습니다.</p></div>'; return; }
+
+  const months = sumBy(spend, t => t.pm).sort((a, b) => a[0] < b[0] ? -1 : 1);
+  const total = sumOf(spend);
+  const avg = total / months.length;
+  const budget = num(form.budget.value);
+  const byCat = sumBy(spend, t => t.cat);
+  const topCats = [...byCat.filter(e => e[0] !== '기타').slice(0, 5).map(e => e[0]), '그 외'];
+  const catParts = topCats.map(c => ({ k: c, v: c === '그 외' ? byCat.filter(e => !topCats.includes(e[0])).reduce((a, e) => a + e[1].sum, 0) : byCat.find(e => e[0] === c)[1].sum, n: c === '그 외' ? byCat.filter(e => !topCats.includes(e[0])).reduce((a, e) => a + e[1].cnt, 0) : byCat.find(e => e[0] === c)[1].cnt })).filter(p => p.v > 0);
+  const last = months.at(-1);
+
+  // 이번 달(진행 중인 월급 월)과 지난달은 기간 선택과 상관없이 고른 자료 전체에서 본다
+  const thisPm = pms.at(-1), prevPm = pms.at(-2);
+  const thisSum = sumOf(pool.filter(t => t.pm === thisPm)), prevSum = prevPm ? sumOf(pool.filter(t => t.pm === prevPm)) : 0;
+  const ref = budget || avg, refName = budget ? '예산' : '월평균';
+  // 그 전 12개월 비교는 같은 자료가 다 들어 있을 때만 (은행은 2025-11부터라 '전체'로 비교하면 부풀려진다)
+  const prevYearAvg = (() => { if (period !== 'recent' || pms.length < 24) return null; const prev = pms.slice(-24, -12); if (bankAll.length && bs && prev[0] < ym(bs[0])) return null; return sumOf(pool.filter(t => prev.includes(t.pm))) / prev.length; })();
+
+  // 과소비 신호
+  const sig = [];
+  const small = spend.filter(t => -t.amt <= 15000 && t.cat !== '이체/송금');
+  const smallSum = sumOf(small);
+  if (small.length) sig.push({ t: '1만 5천 원 이하 소액 결제', big: small.length.toLocaleString() + '건', p: `${won(smallSum)} · 금액의 ${pct(smallSum, total)}`, r: small.length / spend.length });
+  const night = spend.filter(t => t.src !== '쿠팡' && (t.d.getHours() >= 23 || t.d.getHours() < 4)); // 쿠팡 주문은 날짜만 있어 0시로 잡히므로 뺀다
+  if (night.length) { const ns = sumOf(night); sig.push({ t: '밤 11시~새벽 4시 결제', big: night.length + '건', p: `${won(ns)} · 충동구매가 잦은 시간대`, r: ns / total, warn: true }); }
+  const weSum = sumOf(spend.filter(t => t.d.getDay() === 0 || t.d.getDay() === 6));
+  sig.push({ t: '주말(토·일) 비중', big: pct(weSum, total), p: `주말은 일주일의 29%인데 지출은 ${pct(weSum, total)}`, r: weSum / total, warn: weSum / total > 0.35 });
+  const repeat = sumBy(coupang, t => t.desc).filter(e => e[1].cnt >= 3);
+  if (repeat.length) { const rs = repeat.reduce((s, e) => s + e[1].sum, 0); sig.push({ t: '쿠팡 3번 이상 산 상품', big: repeat.length + '종', p: `${won(rs)} · 정기배송·대용량 후보`, r: rs / total }); }
+  const overs = budget ? months.filter(m => m[1].sum > budget) : months.filter(m => m[1].sum > avg * 1.2);
+  sig.push({ t: budget ? `예산을 넘은 달` : '평균보다 20% 넘게 쓴 달', big: `${overs.length}개월`, p: overs.length ? `${months.length}개월 중 · 최대 ${[...overs].sort((a, b) => b[1].sum - a[1].sum)[0][0]} ${man(Math.max(...overs.map(m => m[1].sum)))}원` : `${months.length}개월 중 없음`, r: overs.length / months.length, warn: true });
+
+  // 요일, 금액대
+  const DOW = ['월', '화', '수', '목', '금', '토', '일'], dowIdx = [1, 2, 3, 4, 5, 6, 0];
+  const dows = dowIdx.map((d, i) => { const rs = spend.filter(t => t.d.getDay() === d); const v = sumOf(rs); return { k: DOW[i], v, top: man(v), tip: `${DOW[i]}요일\n${won(v)} · ${rs.length}건`, cnt: rs.length }; });
+  const BINS = [['~5천', 0, 5000], ['5천~1만', 5000, 10001], ['1만~2만', 10001, 20000], ['2만~5만', 20000, 50000], ['5만~10만', 50000, 100000], ['10만~', 100000, Infinity]];
+  const bins = BINS.map(([k, lo, hi]) => { const rs = spend.filter(t => -t.amt >= lo && -t.amt < hi); const s = sumOf(rs); return { k, v: rs.length, top: rs.length + '건', share: pct(s, total), tip: `${k}원\n${rs.length}건 · ${won(s)} (금액의 ${pct(s, total)})` }; });
+
+  const topItems = coupang.length ? `<section><h2>쿠팡에서 많이 산 상품</h2><p class="lede">같은 상품명 기준 금액 상위 8개</p><figure>${hbars(sumBy(coupang, t => t.desc), total, { limit: 8, hiFirst: 3, labelW: 230 })}</figure></section>` : '';
+  const topPlaces = bankSpend.length ? `<section><h2>자주 쓰는 곳</h2><p class="lede">카카오뱅크 거래 내용 기준 상위 8곳</p><figure>${hbars(sumBy(bankSpend, t => t.desc), total, { limit: 8, hiFirst: 3, labelW: 230 })}</figure></section>` : '';
+
+  out.innerHTML = `
+    <div class="kpis">
+      <div class="kpi accent">
+        <div class="k">이번 달 · ${pmRange(thisPm)}</div>
+        <div class="v">${manN(thisSum)}<small>만원</small></div>
+        <div class="meter" role="img" aria-label="${refName}의 ${pct(thisSum, ref)}"><span style="width:${Math.min(100, thisSum / ref * 100).toFixed(1)}%"></span></div>
+        <div class="d">${refName} ${man(ref)}원의 ${pct(thisSum, ref)} 사용</div>
+      </div>
+      <div class="kpi">
+        <div class="k">지난달 · ${prevPm ? pmRange(prevPm) : '-'}</div>
+        <div class="v">${manN(prevSum)}<small>만원</small></div>
+        <div class="d">${prevSum > ref ? `<span class="chip up">${refName}보다 ${man(prevSum - ref)}원 많음</span>` : `<span class="chip">${refName} 안쪽</span>`}</div>
+      </div>
+      <div class="kpi">
+        <div class="k">월평균 · ${form.period.selectedOptions[0].text}</div>
+        <div class="v">${manN(avg)}<small>만원</small></div>
+        <div class="d">${prevYearAvg ? `<span class="chip ${avg > prevYearAvg ? 'up' : ''}">그 전 12개월보다 ${Math.abs(Math.round((avg / prevYearAvg - 1) * 100))}% ${avg > prevYearAvg ? '많음' : '적음'}</span>` : `${months.length}개월 · 총 ${man(total)}원`}</div>
+      </div>
+      <div class="kpi">
+        <div class="k">가장 많이 쓴 곳</div>
+        <div class="v" style="font-size:var(--text-2xl)">${esc(catParts[0].k)}</div>
+        <div class="d">${pct(catParts[0].v, total)} · ${man(catParts[0].v)}원${income ? ` · 입금 ${man(income)}원` : ''}</div>
+      </div>
+    </div>
+
+    <div class="main">
+      <section>
+        <h2>월별 지출 <span class="chip">${months.length}개월</span></h2>
+        <p class="lede">파란 막대가 이번 달, 빨간 막대는 ${budget ? '예산' : '평균보다 20% 넘게 쓴 달'}입니다. 막대에 마우스를 올리면 금액이 보입니다.</p>
+        <figure>${monthChart(months, avg, budget, thisPm)}</figure>
+      </section>
+      <section>
+        <h2>어디에 썼나</h2>
+        <p class="lede">${src === 'bank' ? '은행 거래 내용' : '쿠팡은 상품명'}으로 나눈 카테고리</p>
+        <div class="donut">${donut(catParts, total)}
+          <ul class="catlist">${catParts.map((p, j) => `<li><i class="s${j}"></i><span class="n">${esc(p.k)}</span><span class="p">${pct(p.v, total)}</span><span class="m">${man(p.v)}원 · ${p.n}건</span></li>`).join('')}</ul>
+        </div>
+      </section>
+    </div>
+
+    <section class="bare" id="signals">
+      <h2>과소비 신호</h2>
+      <ul class="signals">${sig.map(s => `<li class="${s.warn ? 'warn' : ''}"><div class="pagehead"><strong>${esc(s.t)}</strong><span class="big">${esc(s.big)}</span></div><div class="meter" role="img" aria-label="비율 ${Math.round(s.r * 100)}%"><span style="width:${Math.min(100, s.r * 100).toFixed(1)}%"></span></div><p>${esc(s.p)}</p></li>`).join('')}</ul>
+    </section>
+
+    <div class="two">
+      <section>
+        <h2>요일별</h2>
+        <p class="lede">파란 막대가 주말</p>
+        <figure>${vbars(dows, { hi: it => it.k === '토' || it.k === '일', sub: it => it.cnt + '건' })}</figure>
+      </section>
+      <section>
+        <h2>한 번에 얼마씩</h2>
+        <p class="lede">금액대별 결제 건수 (아래는 금액 비중)</p>
+        <figure>${vbars(bins, { hi: it => it.k === '~5천' || it.k === '5천~1만', sub: it => it.share })}</figure>
+      </section>
+    </div>
+
+    <section>
+      <h2>카테고리 변화</h2>
+      <p class="lede">달마다 상위 카테고리가 차지한 금액</p>
+      <figure>${stackChart(spend, months.map(m => m[0]), topCats)}
+        <div class="legend">${topCats.map((c, j) => `<span><i class="s${j}"></i>${esc(c)}</span>`).join('')}</div></figure>
+    </section>
+
+    ${topItems && topPlaces ? `<div class="two">${topItems}${topPlaces}</div>` : topItems + topPlaces}`;
+}
+
+// 기간 목록: 최근 12개월, 전체, 그리고 데이터에 있는 월급 연도
+readState(); // 데이터가 없어도 탭은 주소대로 연다
+if (DATA) {
+  const years = [...new Set([...COUPANG, ...BANK].map(t => ym(t.d).slice(0, 4)))].sort().reverse();
+  form.period.innerHTML = [['recent', '최근 12개월'], ['all', '전체 기간'], ...years.map(y => [y, y + '년'])].map(([v, k]) => `<option value="${v}">${k}</option>`).join('');
+  readState();
+  form.addEventListener('change', run);
+  form.budget.addEventListener('input', run);
+  form.addEventListener('submit', e => e.preventDefault());
+  run();
+}
+
+// 그래프 툴팁: data-tip이 있는 요소 위에서 마우스를 따라다닌다
+const tip = document.getElementById('tip');
+document.addEventListener('mousemove', e => {
+  const g = e.target.closest && e.target.closest('[data-tip]');
+  if (!g) { tip.classList.remove('on'); return; }
+  tip.textContent = g.getAttribute('data-tip');
+  const x = Math.min(e.clientX + 14, innerWidth - tip.offsetWidth - 8), y = e.clientY + 16 + tip.offsetHeight > innerHeight ? e.clientY - tip.offsetHeight - 10 : e.clientY + 16;
+  tip.style.left = x + 'px'; tip.style.top = y + 'px'; tip.classList.add('on');
+});
+document.addEventListener('mouseleave', () => tip.classList.remove('on'));
+
+// 간단 자체 점검 (개발자도구 콘솔에 실패만 표시됨)
+console.assert(toDate('2026.11.07 13:05:00').getHours() === 13, 'date parse');
+console.assert(num('-12,500') === -12500, 'num parse');
+console.assert(categorize('스타벅스 강남점') === '카페/간식', 'categorize');
+console.assert(classifyItem('하기스 NEW 보송보송 팬티형 기저귀') === '육아', 'classifyItem');
+console.assert(ym(new Date(2025, 11, 25)) === '2026-01', 'payday month');
+console.assert(pmRange('2026-01') === '12/25~1/24', 'pm range');
+console.assert(ticks(2500000).length === 6 && ticks(2000000).length === 5, 'ticks');
+console.assert(categorize('GS더프레시') === '장보기' && categorize('○○이비인후과의원') === '병원·약국' && categorize('○○어린이집') === '육아' && categorize('네이버페이충전') === '페이 충전', 'bank cats');
+console.assert(esc('<b>') === '&lt;b&gt;', 'escape');
+console.assert(maskPlace('○○약국', '체크카드결제') === '**약국' && maskPlace('홍길동', '일반이체') === '홍**' && maskPlace('롯데마트 ○○점', '체크카드결제') === '롯데마트 **', 'mask');
+console.assert(categorize('쿠팡이츠') === '배달', 'coupang eats = delivery');
+console.assert(!DATA || (COUPANG.length === DATA.coupang.length && BANK.length === DATA.bank.length), 'data.js rows');
+</script></body></html>

@@ -1,0 +1,16 @@
+# 개인 정보가 들어 있어서 공개 저장소에 올리지 않는 것
+# - data/ : 쿠팡·카카오뱅크 원본 (csv, md, xlsx)
+# - data.js : 이 PC용 데이터 (상호·이름 그대로). 공개용은 data.public.js
+# - exclude.local.json : 분석에서 빼는 이름 목록 (실명)
+# - CLAUDE.md : 분석 규칙에 실명이 있음
+data/
+data.js
+exclude.local.json
+CLAUDE.md
+
+# 도구가 만드는 것
+.claude/settings.local.json
+.hallmark/
+.impeccable/
+__pycache__/
+_site/
