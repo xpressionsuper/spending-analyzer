@@ -23,7 +23,7 @@ const coupang = [];
 for (const f of fs.readdirSync(dir).filter(f => /^coupang_\d{4}\.md$/.test(f)).sort()) {
   for (const c of tableRows(fs.readFileSync(path.join(dir, f), 'utf8'))) {
     assert(c.length === 4 && Number.isFinite(num(c[2])), `${f}: 읽을 수 없는 줄 ${c}`);
-    coupang.push([c[0], c[1], num(c[2])]);
+    coupang.push([c[0], c[1], num(c[2]) * num(c[3])]); // 결제금액 열은 단가라서 수량을 곱한다
   }
 }
 

@@ -127,6 +127,7 @@ rect.b:not([rx]) { rx: 4px; } /* 리포트처럼 rx를 안 준 막대도 끝을 
 [data-tip]:hover .b.hi, [data-tip]:hover .b.over { opacity: 0.85; }
 .line-accent { fill: none; stroke: var(--color-accent); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
 .dot-accent { fill: var(--color-accent); stroke: var(--color-card); stroke-width: 2; }
+.ring-dot { fill: var(--color-bar-hover); stroke: var(--color-card); stroke-width: 1.5; }
 .whisker { stroke: var(--color-ink-2); stroke-width: 1.25; }
 .s0 { fill: var(--c0); } .s1 { fill: var(--c1); } .s2 { fill: var(--c2); } .s3 { fill: var(--c3); } .s4 { fill: var(--c4); } .s5 { fill: var(--c5); }
 .ring { fill: none; stroke-width: 22; transition: stroke-width var(--dur) var(--ease-out); }
