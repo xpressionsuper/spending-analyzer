@@ -319,6 +319,111 @@ function diaperChart() {
   return svg(W, H, '기저귀 장당 가격 변화', out);
 }
 
+// ---------- 최근 달 비교 (순수 데이터: analysis/data/*.md 와 '순수 데이터' 탭) ----------
+// 평가하는 달: 마지막으로 다 찬 월급 월 + 지금 진행 중인 월급 월. 기준값은 전체 평균, 육아 시작 이후 평균, 직전 12개월 평균, 작년 같은 달.
+// 은행은 2025-11-07부터라 은행이 들어간 비교는 은행이 온전히 있는 달끼리만 한다. 네이버페이 충전은 AI 분석과 같게 뺀다.
+const dataEnd = (() => { const all = [...rows.map(r => r.d), ...SD.bank.map(r => toD(r[0]))]; return new Date(Math.max(...all)); })();
+const dsOf = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const pmStart = pm => { const [y, m] = pm.split('-').map(Number); return new Date(y, m - 2, 25); }; // N월 = (N-1)월 25일부터
+const dayIn = d => Math.floor((d - pmStart(ym(d))) / 864e5) + 1; // 월급 월 안에서 며칠째(1부터)
+const bankAll = SD.bank.filter(r => r[1] === '출금' && !AI_SKIP.test(r[4])).map(([d, , amt, cat]) => ({ d: toD(d), pm: ym(toD(d)), price: -amt, cat, src: '은행' }));
+const coupAll = rows.map(r => ({ d: r.d, pm: r.pm, price: r.price, cat: r.cat, src: '쿠팡', item: r.item }));
+const bankFirst = new Date(Math.min(...SD.bank.map(r => +toD(r[0]))));
+const curPm = ym(dataEnd), lastPm = months.at(-1); // 진행 중, 마지막으로 다 찬 달
+const curDays = dayIn(dataEnd);
+const coupMonths = months; // 2023-02 ~ 마지막 완전한 달
+const bankMonths = months.filter(m => pmStart(m) >= bankFirst); // 은행이 처음부터 끝까지 있는 달
+const BABY_START = (() => { const f = rows.filter(r => r.cat === '육아' && !/맘스|흉터|제왕절개|임산부|수유브라|엽산|예비맘/.test(r.item)).sort((a, b) => a.d - b.d)[0]; return f ? f.pm : months[0]; })();
+const babyMonths = coupMonths.filter(m => m >= BABY_START);
+const msum = (list, pm, f = () => true) => sum(list.filter(r => r.pm === pm && f(r)).map(r => r.price));
+const avgOver = (list, pms, f) => pms.length ? sum(pms.map(pm => msum(list, pm, f))) / pms.length : null;
+const before12 = pm => coupMonths.filter(m => m < pm).slice(-12);
+const lastYear = pm => `${+pm.slice(0, 4) - 1}-${pm.slice(5)}`;
+const rankOf = (list, pm, pool, f) => { const v = msum(list, pm, f); const vals = pool.map(m => msum(list, m, f)); return { r: 1 + vals.filter(x => x > v).length, n: vals.length }; };
+const pctd = (a, b) => b ? (a / b - 1) * 100 : null;
+
+// 1) 마지막 완전한 달의 합계
+const lastCompare = {
+  pm: lastPm,
+  coupang: { v: msum(coupAll, lastPm), all: avgOver(coupAll, coupMonths.filter(m => m !== lastPm)), baby: avgOver(coupAll, babyMonths.filter(m => m !== lastPm)), p12: avgOver(coupAll, before12(lastPm)), ly: msum(coupAll, lastYear(lastPm)), rank: rankOf(coupAll, lastPm, babyMonths) },
+  bank: { v: msum(bankAll, lastPm), p: avgOver(bankAll, bankMonths.filter(m => m < lastPm)), n: bankMonths.filter(m => m < lastPm).length },
+};
+// 2) 카테고리별 (쿠팡+은행, 은행이 있는 달끼리)
+const bothPrev = bankMonths.filter(m => m < lastPm);
+const both = [...coupAll, ...bankAll];
+const catNames = [...new Set(both.filter(r => r.pm === lastPm || bothPrev.includes(r.pm)).map(r => r.cat))];
+const catCompare = catNames.map(c => ({ c, v: msum(both, lastPm, r => r.cat === c), p: avgOver(both, bothPrev, r => r.cat === c) })).filter(x => x.v || x.p).map(x => ({ ...x, d: x.v - x.p })).sort((a, b) => b.d - a.d);
+// 3) 진행 중인 달: 같은 일수까지 쓴 돈끼리 비교
+const sameDays = (list, pm) => sum(list.filter(r => r.pm === pm && dayIn(r.d) <= curDays).map(r => r.price));
+const curCompare = {
+  pm: curPm, days: curDays, end: dsOf(dataEnd),
+  coupang: { v: sameDays(coupAll, curPm), p: mean(before12(curPm).map(m => sameDays(coupAll, m))) },
+  bank: { v: sameDays(bankAll, curPm), p: bankMonths.length ? mean(bankMonths.map(m => sameDays(bankAll, m))) : null },
+};
+// 4) 육아 세부: 마지막 완전한 달 vs 육아 시작 이후 평균 vs 직전 12개월 평균
+const babyAll = babyRows.filter(r => !(r.src === '은행' && AI_SKIP.test(r.item || '')));
+const babySubs = [...new Set(babyAll.map(r => r.sub))];
+const babyCompare = babySubs.map(s => ({ s, v: msum(babyAll, lastPm, r => r.sub === s), baby: avgOver(babyAll, babyMonths.filter(m => m < lastPm), r => r.sub === s), p12: avgOver(babyAll, before12(lastPm), r => r.sub === s) })).filter(x => x.v || x.p12).sort((a, b) => b.v - a.v);
+const babyTotalCompare = { v: msum(babyAll, lastPm), baby: avgOver(babyAll, babyMonths.filter(m => m < lastPm)), p12: avgOver(babyAll, before12(lastPm)) };
+// 5) 행동 지표 (쿠팡+은행, 은행 있는 달끼리)
+const behav = pm => { const rs = both.filter(r => r.pm === pm); const tot = sum(rs.map(r => r.price)); return { n: rs.length, days: new Set(rs.map(r => dsOf(r.d))).size, small: rs.length ? rs.filter(r => r.price <= 10000).length / rs.length * 100 : 0, weekend: tot ? sum(rs.filter(r => [0, 6].includes(r.d.getDay())).map(r => r.price)) / tot * 100 : 0, avgTicket: rs.length ? tot / rs.length : 0 }; };
+const behavLast = behav(lastPm), behavPrev = (() => { const bs = bothPrev.map(behav); return Object.fromEntries(Object.keys(behavLast).map(k => [k, mean(bs.map(b => b[k]))])); })();
+// 6) 월별 표 (전체 기간)
+const monthTable = [...new Set([...coupAll.map(r => r.pm), ...bankAll.map(r => r.pm)])].sort().filter(m => m >= '2023-02').map(m => ({ m, c: msum(coupAll, m), b: msum(bankAll, m), partial: m === curPm || m === ym(bankFirst) }));
+
+// ---- 마크다운 (analysis/data/<데이터 마지막 날>.md) ----
+const fmtW = n => n == null ? '-' : Math.round(n).toLocaleString('ko-KR');
+const fmtP = (a, b) => { const p = pctd(a, b); return p == null ? '-' : `${p >= 0 ? '+' : ''}${p.toFixed(0)}%`; };
+const mdTable = (head, body) => [`| ${head.join(' | ')} |`, `|${head.map((_, i) => i ? '---:' : '---').join('|')}|`, ...body.map(r => `| ${r.join(' | ')} |`)].join('\n');
+const dataMd = `# 순수 데이터 기록 · 데이터 마지막 날 ${dsOf(dataEnd)}
+
+이 파일은 \`node report.js\`가 자동으로 만든다. 계산 결과만 있고 해석은 없다. AI 분석(analysis/ai/)이 이 파일을 근거로 쓴다.
+공개 저장소에 올라가므로 상호·이름은 넣지 않는다(카테고리만).
+
+## 데이터 범위
+- 쿠팡: ${dsOf(new Date(Math.min(...rows.map(r => +r.d))))} ~ ${dsOf(new Date(Math.max(...rows.map(r => +r.d))))}, ${rows.length.toLocaleString()}건 (금액 = 단가 × 수량, 할인 전)
+- 카카오뱅크: ${dsOf(bankFirst)} ~ ${dsOf(new Date(Math.max(...SD.bank.map(r => +toD(r[0])))))}, 분석 대상 ${SD.bank.length}건 (분석 규칙 2 적용, 네이버페이 충전은 이 기록에서도 뺌)
+- 월 구분: 월급날 기준 (N월 = 전월 25일 ~ 당월 24일). 육아 시작 월: ${BABY_START} (산모용품을 뺀 첫 육아용품 구매)
+- 마지막으로 다 찬 달: ${lastPm} · 진행 중인 달: ${curPm} (${curDays}일째까지)
+
+## 1. 마지막으로 다 찬 달 (${lastPm}) 합계
+${mdTable(['구분', `${lastPm}`, '전체 평균', '육아 시작 이후 평균', '직전 12개월 평균', '작년 같은 달', '육아 시작 이후 순위'], [
+  ['쿠팡', fmtW(lastCompare.coupang.v), fmtW(lastCompare.coupang.all), fmtW(lastCompare.coupang.baby), fmtW(lastCompare.coupang.p12), fmtW(lastCompare.coupang.ly), `${lastCompare.coupang.rank.r}위 / ${lastCompare.coupang.rank.n}개월`],
+  ['카카오뱅크', fmtW(lastCompare.bank.v), '-', '-', `${fmtW(lastCompare.bank.p)} (${lastCompare.bank.n}개월)`, '-', '-'],
+])}
+
+직전 12개월 평균 대비: 쿠팡 ${fmtP(lastCompare.coupang.v, lastCompare.coupang.p12)}, 카카오뱅크 ${fmtP(lastCompare.bank.v, lastCompare.bank.p)}. 작년 같은 달 대비 쿠팡 ${fmtP(lastCompare.coupang.v, lastCompare.coupang.ly)}.
+
+## 2. 진행 중인 달 (${curPm}, ${curDays}일째까지) · 같은 일수끼리
+${mdTable(['구분', `${curPm} ${curDays}일째까지`, `이전 달들의 첫 ${curDays}일 평균`, '차이'], [
+  ['쿠팡 (직전 12개월)', fmtW(curCompare.coupang.v), fmtW(curCompare.coupang.p), fmtP(curCompare.coupang.v, curCompare.coupang.p)],
+  ['카카오뱅크 (은행 있는 달)', fmtW(curCompare.bank.v), fmtW(curCompare.bank.p), fmtP(curCompare.bank.v, curCompare.bank.p)],
+])}
+
+## 3. 카테고리별 (${lastPm} vs 은행이 있는 이전 ${bothPrev.length}개월 평균, 쿠팡+카카오뱅크)
+${mdTable(['카테고리', lastPm, '이전 평균', '차이(원)', '차이(%)'], catCompare.map(x => [x.c, fmtW(x.v), fmtW(x.p), `${x.d >= 0 ? '+' : ''}${fmtW(x.d)}`, fmtP(x.v, x.p)]))}
+
+## 4. 육아 세부 (${lastPm})
+합계 ${fmtW(babyTotalCompare.v)}원 · 육아 시작 이후 평균 ${fmtW(babyTotalCompare.baby)}원 (${fmtP(babyTotalCompare.v, babyTotalCompare.baby)}) · 직전 12개월 평균 ${fmtW(babyTotalCompare.p12)}원 (${fmtP(babyTotalCompare.v, babyTotalCompare.p12)}). 은행 항목(어린이집·아이 병원·키즈카페)은 ${dsOf(bankFirst)}부터만 있다.
+
+${mdTable(['세부 항목', lastPm, '육아 시작 이후 평균', '직전 12개월 평균', '직전 12개월 대비'], babyCompare.map(x => [x.s, fmtW(x.v), fmtW(x.baby), fmtW(x.p12), fmtP(x.v, x.p12)]))}
+
+## 5. 행동 지표 (${lastPm} vs 은행이 있는 이전 ${bothPrev.length}개월 평균)
+${mdTable(['지표', lastPm, '이전 평균'], [
+  ['결제 건수', fmtW(behavLast.n), behavPrev.n.toFixed(0)],
+  ['결제한 날 수', fmtW(behavLast.days), behavPrev.days.toFixed(1)],
+  ['1만 원 이하 결제 비율', behavLast.small.toFixed(0) + '%', behavPrev.small.toFixed(0) + '%'],
+  ['주말 지출 비중', behavLast.weekend.toFixed(0) + '%', behavPrev.weekend.toFixed(0) + '%'],
+  ['건당 평균', fmtW(behavLast.avgTicket), fmtW(behavPrev.avgTicket)],
+])}
+
+## 6. 월별 합계 (전체 기간)
+${mdTable(['월', '쿠팡', '카카오뱅크', '합계', '비고'], monthTable.map(x => [x.m, fmtW(x.c), x.b ? fmtW(x.b) : '-', fmtW(x.c + x.b), x.m === curPm ? `진행 중(${curDays}일째)` : x.m === ym(bankFirst) ? '은행 일부만' : '']))}
+
+## 7. 육아 세부 월별 (${BABY_START} 이후, 원)
+${(() => { const ms = [...new Set(babyAll.map(r => r.pm))].sort().filter(m => m >= BABY_START); const subs = babySubs.sort((a, b) => sum(babyAll.filter(r => r.sub === b).map(r => r.price)) - sum(babyAll.filter(r => r.sub === a).map(r => r.price))); return mdTable(['월', ...subs, '합계'], ms.map(m => [m, ...subs.map(s => { const v = msum(babyAll, m, r => r.sub === s); return v ? fmtW(v) : ''; }), fmtW(msum(babyAll, m))])); })()}
+`;
+
 // ---------- 본문 ----------
 const babyUp = g2325.find(x => x.c === '육아').d;
 const l12Avg = l12Total / 12;
@@ -384,93 +489,66 @@ ${legend(binLabels)}
 </section>
 `;
 
-// [AI 분석] Claude 가 ${asOf} 데이터를 보고 쓴 판단과 소비 가이드. 숫자는 매번 다시 계산되지만 판단 문장은 이 날짜 기준이다.
-// 데이터 건수가 AI_BASIS 와 달라지면 '다시 분석 필요' 안내가 뜬다 → 그때 AI 에게 다시 분석을 맡기고 이 문장들을 고친다.
-const AI_BASIS = { date: '2026-11-08', coupang: 2269, bank: 569 };
-const stale = SD.coupang.length !== AI_BASIS.coupang || SD.bank.length !== AI_BASIS.bank;
-const report = `<header class="top">
-${stale ? `<p class="total" style="margin-top:0"><span>이 분석은 ${AI_BASIS.date} 데이터(쿠팡 ${AI_BASIS.coupang.toLocaleString()}건, 은행 ${AI_BASIS.bank}건)로 쓴 것입니다. 지금 데이터는 쿠팡 ${SD.coupang.length.toLocaleString()}건, 은행 ${SD.bank.length}건이라 판단 문장이 맞지 않을 수 있습니다. AI에게 다시 분석을 요청하세요.</span></p>` : ''}
-<p class="note">Claude(추론형 AI)가 ${AI_BASIS.date}에 쿠팡 4년치와 카카오뱅크 1년치를 보고 쓴 의견입니다. 숫자는 데이터에서 다시 계산되지만, 해석·우선순위·세부 분류·예산 조정률은 AI의 판단입니다. 계산 결과만 보려면 '순수 데이터' 탭을 보세요.</p>
-<h1>소비의 ${share(babyTotal / 12, allAvg)}가 육아이고, 그 절반이 기저귀와 아이 우유입니다</h1>
-<p class="verdict">최근 12개월 쿠팡과 카카오뱅크로 확인되는 소비는 월 <b>${man(allAvg)}원</b>입니다. 그중 아이에게 들어간 돈이 월 <b>${man(babyTotal / 12)}원</b>으로 가장 큽니다. 아이가 크면서 생긴 지출이라 줄이기보다 <b>같은 것을 더 싸게 사는 쪽</b>이 맞습니다. 육아 밖에서는 장보기가 너무 잘게 쪼개져 있습니다.</p>
-<div class="kpis figs">
-<div class="kpi accent"><div class="k">보이는 소비 (월평균)</div><div class="v">${man(allAvg).replace('만', '')}<small>만원</small></div><div class="d">쿠팡 ${man(coupangL12 / 12)} + 은행 ${man(sum(bankOut.map(r => r.price)) / 12)}</div></div>
-<div class="kpi"><div class="k">육아 (월평균)</div><div class="v">${man(babyTotal / 12).replace('만', '')}<small>만원</small></div><div class="d">우유·어린이집·소아과 포함, 소비의 ${share(babyTotal / 12, allAvg)}</div></div>
-<div class="kpi"><div class="k">기저귀 (월평균)</div><div class="v">${man(babyAmt('기저귀') / 12).replace('만', '')}<small>만원</small></div><div class="d">장당 ${Math.round(d5min)}~${Math.round(d5max)}원 (5단계)</div></div>
-<div class="kpi"><div class="k">아이 우유 (월평균)</div><div class="v">${man(babyAmt('아이 우유') / 12).replace('만', '')}<small>만원</small></div><div class="d">최근엔 ${milkGap ? Math.round(milkGap) + '일마다' : ''} 24개씩</div></div>
-</div>
-</header>
+// ---------- AI 분석: analysis/ai/<날짜>.md 를 화면으로 ----------
+// AI 분석의 글은 Claude 가 업데이트 때마다 analysis/ai/ 에 새 md 로 쓴다(이전 것은 그대로 둔다). 여기서는 그것을 HTML 로 바꿀 뿐이다.
+// md 안의 {{chart:이름}} 은 아래 CHARTS 의 그래프로 바뀐다. 표 칸의 '좋아짐/나빠짐/주의/유지' 는 색 칩이 된다.
+const CHARTS = {
+  recent: () => `<figure>${divBars(catCompare.filter(x => Math.abs(x.d) >= 3000).map(x => ({ k: x.c, v: x.d })), v => `${v >= 0 ? '+' : ''}${man(v)}원`)}<figcaption>${lastPm} 카테고리별 지출 − 은행이 있는 이전 ${bothPrev.length}개월 평균 (쿠팡+카카오뱅크). 파랑은 늘어난 것, 회색은 줄어든 것.</figcaption></figure>`,
+  'baby-sub': () => `<h3>세부 항목 (최근 12개월)</h3><figure>${hbars(babyBySub.map(([k, v]) => ({ k, v, tip: `${k}\n최근 12개월 ${won(v)}원 · 육아의 ${share(v, babyTotal)}` })), { labelW: 220, hiN: 2, fmt: v => `${man(v)}원 · ${share(v, babyTotal)}` })}</figure>`,
+  'baby-half': () => `<h3>반기별 흐름</h3><figure>${halfChart()}${legend(HALF_CATS)}<figcaption>* 표시는 6개월이 다 차지 않은 반기. 은행 거래(어린이집·소아과)는 ${dsOf(bankFirst)}부터만 있습니다.</figcaption></figure>`,
+  diaper: () => `<h3>기저귀 장당 가격</h3><figure>${diaperChart()}<figcaption>점 하나가 주문 한 번(같은 제품 5·6단계, 물놀이 기저귀 제외). 파란 점은 6단계.</figcaption></figure>`,
+  plan: () => `<figure>${planChart()}</figure><div class="total"><span>제안 예산 합계 (월)</span><strong>${man(planNext)}원</strong></div>`,
+  save: () => `<figure>${hbars(SAVE.map(s => ({ k: s.what, v: s.save, rule: s.rule, tip: `${s.what}\n근거: ${s.basis}, ${won(s.base)}원\n가정: ${s.rule}\n연 ${won(s.save)}원` })), { labelW: 330, hiN: SAVE.length, sub: it => it.rule })}</figure><div class="total"><span>연 절감 여력 합계 (가정)</span><strong>${man(saveTotal)}원</strong></div><p class="note">쿠팡 최근 12개월(${last12[0].m} ~ ${last12.at(-1).m}) 기준. 각 줄 아래 회색 글자가 AI가 정한 가정이고, 항목끼리 일부 겹친다.</p>`,
+};
+const VERDICT = { '좋아짐': 'chip good', '좋음': 'chip good', '나빠짐': 'chip up', '주의': 'chip warn', '유지': 'chip', '보통': 'chip' };
+const inline = t => esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`([^`]+)`/g, '<code>$1</code>');
+function mdToHtml(md, meta, banner) { // meta 가 없으면 머리말 없이 섹션만 (순수 데이터용)
+  const lines = md.split(/\r?\n/), out = [];
+  let inSection = false, list = null, para = [], table = [];
+  const flushPara = () => { if (para.length) { out.push(`<p class="${inSection ? 'md-p' : 'lede'}">${inline(para.join(' '))}</p>`); para = []; } };
+  const flushList = () => { if (list) { out.push(`<${list.tag} class="points">${list.items.map(i => `<li>${inline(i)}</li>`).join('')}</${list.tag}>`); list = null; } };
+  const flushTable = () => { if (table.length) { const cells = l => l.trim().slice(1, -1).split('|').map(c => c.trim()); const head = cells(table[0]), body = table.slice(2).map(cells); out.push(`<div class="scroll"><table class="md-table"><thead><tr>${head.map(h => `<th>${inline(h)}</th>`).join('')}</tr></thead><tbody>${body.map(r => `<tr>${r.map(c => `<td>${VERDICT[c] ? `<span class="${VERDICT[c]}">${esc(c)}</span>` : inline(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`); table = []; } };
+  const flush = () => { flushPara(); flushList(); flushTable(); };
+  if (meta) out.push('<header class="top">', banner || '', `<p class="note">Claude(추론형 AI) 분석 · ${esc(meta.date)} 작성 · 데이터 ${esc(meta.data_through)}까지 · 평가한 달: ${esc(meta.evaluated || '-')}</p>`);
+  for (const l of lines) {
+    let m;
+    if (!l.trim()) { flush(); continue; }
+    if ((m = l.match(/^\{\{chart:([\w-]+)\}\}$/))) { flush(); out.push(CHARTS[m[1]] ? CHARTS[m[1]]() : `<p class="note">(그래프 ${esc(m[1])} 없음)</p>`); continue; }
+    if ((m = l.match(/^(#{1,3}) (.+)/))) {
+      flush();
+      if (m[1] === '#') out.push(`<h1>${inline(m[2])}</h1>`);
+      else if (m[1] === '##') { if (inSection || meta) out.push(inSection ? '</section>' : '</header>'); out.push(`<section><h2>${inline(m[2])}</h2>`); inSection = true; }
+      else out.push(`<h3>${inline(m[2])}</h3>`);
+      continue;
+    }
+    if (l.trim().startsWith('|')) { flushPara(); flushList(); table.push(l); continue; }
+    if ((m = l.match(/^\s*(\d+\.|-) (.+)/))) { flushPara(); flushTable(); const tag = m[1] === '-' ? 'ul' : 'ol'; if (!list || list.tag !== tag) { flushList(); list = { tag, items: [] }; } list.items.push(m[2]); continue; }
+    if (list && /^\s{2,}\S/.test(l)) { list.items[list.items.length - 1] += ' ' + l.trim(); continue; }
+    flushList(); flushTable(); para.push(l.trim());
+  }
+  flush(); if (inSection || meta) out.push(inSection ? '</section>' : '</header>');
+  return out.join('\n');
+}
+const parseMd = text => { const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/); const meta = {}; if (m) m[1].split(/\r?\n/).forEach(l => { const i = l.indexOf(':'); if (i > 0) meta[l.slice(0, i).trim()] = l.slice(i + 1).trim(); }); return { meta, body: m ? m[2] : text }; };
+const aiDir = path.join(__dirname, 'analysis', 'ai');
+const aiFiles = fs.existsSync(aiDir) ? fs.readdirSync(aiDir).filter(f => /^\d{4}-\d{2}-\d{2}\.md$/.test(f)).sort().reverse() : [];
+const AI_REPORTS = aiFiles.map((f, i) => {
+  const { meta, body } = parseMd(fs.readFileSync(path.join(aiDir, f), 'utf8'));
+  meta.date = meta.date || f.slice(0, 10);
+  const title = (body.match(/^# (.+)$/m) || [, f])[1];
+  // 가장 최근 분석보다 새 데이터가 있으면 업데이트가 필요하다고 알린다
+  const newer = i === 0 && meta.data_through && dsOf(dataEnd) > meta.data_through;
+  const banner = newer ? `<p class="total" style="margin-top:0"><span>새 데이터가 ${dsOf(dataEnd)}까지 들어왔습니다. 이 AI 분석은 ${esc(meta.data_through)}까지의 데이터로 쓴 것이라, Claude에게 AI 분석 업데이트를 요청하세요.</span></p>` : '';
+  return { date: meta.date, title, html: mdToHtml(body, meta, banner), stale: !!newer };
+});
+const report = AI_REPORTS.length ? AI_REPORTS[0].html : '<div class="state"><h2 class="h3">아직 AI 분석이 없습니다</h2><p>analysis/ai/ 에 AI 분석 md가 생기면 여기에 보입니다.</p></div>';
 
-<section>
-<h2>진단</h2>
-<ol class="points">
-<li><b>가장 큰 지출은 육아입니다.</b> 쿠팡 육아용품에 아이용 소포장 우유, 어린이집, 소아과를 더하면 최근 12개월 ${man(babyTotal)}원, 소비의 ${share(babyTotal / 12, allAvg)}입니다. 쿠팡 2023→2025 증가분의 ${share(babyUp, totalUp2325)}도 육아였습니다. 분유에서 이유식, 기저귀 큰 단계, 어린이집으로 옮겨 가는 구조적인 증가라 '낭비'로 보기 어렵습니다.</li>
-<li><b>장보기가 너무 잘게 쪼개져 있습니다.</b> 마트·슈퍼 ${groceryStores}곳과 쿠팡 식품을 합쳐 1년에 ${groceryVisits}번 장을 봤고, 1년 중 ${payDays}일 무언가를 결제했습니다. 식비는 월 ${man(catSum(FOOD))}원입니다. 자주 사는 습관은 계획에 없던 물건을 같이 담게 만듭니다.</li>
-<li><b>작은 결제가 절반입니다.</b> 1만 원 이하 결제가 ${allSmall.length}건으로 전체의 ${share(allSmall.length, allL12.length)}입니다. 한 건은 작아도 장바구니를 여는 횟수 자체가 지출을 늘립니다.</li>
-<li><b>주말보다는 '횟수'가 문제입니다.</b> 쿠팡만 보면 주말에 더 쓰지만(${pv(wk.p)}), 은행까지 합치면 주말 비중은 ${share(sum(allL12.filter(r => [0, 6].includes(r.d.getDay())).map(r => r.price)), allTotal)}로 일주일 중 주말 비율(29%)과 큰 차이가 없습니다.</li>
-</ol>
-</section>
+const pick = (from, to) => { const a = dataMd.indexOf(from), b = to ? dataMd.indexOf(to) : dataMd.length; return dataMd.slice(a, b).replace(/^## \d+\. /gm, '## '); }; // 화면에서는 절 번호를 뗀다
+const recentHtml = `<section class="bare"><h2>최근 달 비교</h2><p class="lede">마지막으로 다 찬 달(${lastPm})과 진행 중인 달(${curPm}, ${curDays}일째)을 지금까지의 데이터와 비교한 계산 결과입니다. 네이버페이 충전은 뺐습니다. 같은 내용이 analysis/data/${dsOf(dataEnd)}.md 에 저장됩니다.</p></section>` + mdToHtml(pick('## 1.', '## 3.') + '\n{{chart:recent}}\n\n' + pick('## 5.', '## 6.'), null);
+fs.writeFileSync(path.join(__dirname, 'report_body.js'), `// report.js 가 만든 파일. 직접 고치지 말 것. index.html 이 불러온다.\n// AI_REPORTS: 'AI 분석' 탭 (analysis/ai/*.md, 최신이 먼저), STATS_HTML: '순수 데이터' 탭 아래 통계 (계산 결과만)\nwindow.AI_REPORTS = ${JSON.stringify(AI_REPORTS.map(({ date, title, html, stale }) => ({ date, title, html, stale })))};\nwindow.REPORT_HTML = window.AI_REPORTS.length ? window.AI_REPORTS[0].html : ${JSON.stringify(report)};\nwindow.STATS_HTML = ${JSON.stringify(recentHtml + stats)};\n`);
+console.log(`report_body.js: AI 분석 ${AI_REPORTS.length}개 (최신 ${AI_REPORTS[0] ? AI_REPORTS[0].date : '-'}${AI_REPORTS[0] && AI_REPORTS[0].stale ? ', 업데이트 필요' : ''}), 보이는 소비 월 ${won(allAvg)}, 육아 월 ${won(babyTotal / 12)}`);
 
-<section id="baby">
-<h2>육아 자세히 보기</h2>
-<p class="lede">최근 12개월 ${man(babyTotal)}원을 AI가 상품명으로 ${babyBySub.length}가지로 나눴습니다. 쿠팡 '유제품'에 있던 아이용 소포장 우유와, 은행의 어린이집·소아과·키즈카페도 넣었습니다.</p>
-<figure>${hbars(babyBySub.map(([k, v]) => ({ k, v, tip: `${k}\n최근 12개월 ${won(v)}원 · 육아의 ${share(v, babyTotal)}` })), { labelW: 220, hiN: 2, fmt: v => `${man(v)}원 · ${share(v, babyTotal)}` })}</figure>
-<h3>반기별 흐름: 무엇에서 무엇으로 옮겨 갔나</h3>
-<figure>${halfChart()}${legend(HALF_CATS)}<figcaption>* 표시는 6개월이 다 차지 않은 반기. 은행 거래(어린이집·소아과)는 2025년 11월부터만 있습니다.</figcaption></figure>
-<h3>기저귀 장당 가격</h3>
-<figure>${diaperChart()}<figcaption>점 하나가 주문 한 번입니다(같은 제품 5·6단계, 물놀이 기저귀 제외). 파란 점은 6단계.</figcaption></figure>
-
-<h3>항목별 판단</h3>
-<ol class="points">
-<li><b>기저귀: 같은 제품도 언제 사느냐에 따라 ${share(d5max - d5min, d5min)} 차이.</b> 최근 12개월 5단계 184매를 장당 ${Math.round(d5min)}원에 산 적도, ${Math.round(d5max)}원에 산 적도 있습니다. 매번 가장 싸게 샀다면 1년에 ${man(diaperSave)}원을 덜 썼습니다. ${d6 ? `${d6.ds}에는 6단계(장당 ${Math.round(d6.per)}원)로 넘어갔습니다. ` : ''}배변 훈련을 시작할 시기라 기저귀 지출은 앞으로 줄어들 가능성이 큽니다. 그 전까지는 가격이 내려갔을 때 2~3팩씩 사 두는 것이 가장 쉬운 절약입니다.</li>
-<li><b>아이 우유: 양이 많아졌습니다.</b> 125ml에서 200ml로 바뀌었고, 최근 4개월은 ${milkGap ? Math.round(milkGap) + '일마다' : '자주'} 24개씩 사서 하루 약 ${Math.round(milkMl / milkDays)}ml 꼴입니다(ml당 ${milkPerMl.toFixed(1)}원). 아이 혼자 마시는 양으로는 많은 편이라, 가족이 같이 마신다면 어른 몫은 대용량 팩으로 나누는 게 낫습니다. 아이 몫만 소포장으로 사면 이 항목은 크게 줄어듭니다.</li>
-<li><b>이유식 고기·생선: 정점을 지나 자연스럽게 줄고 있습니다.</b> 2025년 하반기 ${man(subHalf('이유식 고기·생선', '2025 하'))}원에서 최근 반기 ${man(subHalf('이유식 고기·생선', halves.at(-1)))}원으로 내려왔습니다. 가족 식사로 넘어가는 중이니 따로 관리할 필요는 없습니다.</li>
-<li><b>이유식·유아식 완제품: 늘고 있습니다.</b> 최근 12개월 ${man(babyAmt('이유식·유아식 완제품'))}원입니다. 바쁜 날을 위한 비상용으로만 두고, 어른 반찬에서 덜어 주는 날을 늘리면 고기·생선 재료비와 함께 줄어듭니다.</li>
-<li><b>위생·스킨케어: 제품 가짓수가 많습니다.</b> 최근 12개월 ${man(babyAmt('위생·스킨케어'))}원, 브랜드가 ${careBrands}가지입니다. 로션·크림·수딩젤·워시를 한두 가지로 정해 대용량으로 사면 단가가 내려갑니다.</li>
-<li><b>어린이집: 새로 생긴 고정비입니다.</b> ${daycare.length ? `${daycare[0].ds.slice(0, 7)}부터 시작했고 첫 달 ${man(daycare.filter(r => r.pm === daycare[0].pm).reduce((s, r) => s + r.price, 0))}원(입소 비용 포함으로 보임), 이후 달마다 ${man(median(daycare.slice(1).map(r => r.price)))}원 안팎입니다.` : ''} 줄일 대상이 아니라 매달 예산에 미리 잡아 둘 항목입니다.</li>
-<li><b>놀이·교구, 가구·안전용품: 한 번에 크게 나갑니다.</b> 퍼즐매트처럼 몇 년 쓰는 물건은 중고나 물려받기를 먼저 알아보면 좋습니다.</li>
-<li><b>분유는 이미 끝났습니다.</b> 2024년 하반기~2025년 상반기에 ${man(subHalf('분유·영양제', '2024 하') + subHalf('분유·영양제', '2025 상'))}원이었고, 지금은 거의 없습니다. 소아과는 1회 3~8천 원대로 금액이 작습니다.</li>
-</ol>
-</section>
-
-<section>
-<h2>소비 가이드</h2>
-<p class="lede">효과가 크고 바로 할 수 있는 순서입니다.</p>
-<ol class="points">
-<li><b>기저귀는 가격이 내려갔을 때 2~3팩씩.</b> 장당 ${Math.round(d5min)}원 근처면 사고, ${Math.round(d5med)}원(중앙값)보다 비싸면 미룹니다. 1년에 ${man(diaperSave)}원 정도 차이가 납니다.</li>
-<li><b>우유는 아이 몫과 어른 몫을 나눠 사기.</b> 아이 몫만 소포장으로 사면 지금 월 ${man(babyAmt('아이 우유') / 12)}원인 항목이 크게 줄어듭니다.</li>
-<li><b>장보기는 주 2회, 정해진 요일에.</b> 목록을 먼저 쓰고 한 곳에서 몰아 삽니다. 쿠팡은 반복해서 사는 필수품만 남깁니다.</li>
-<li><b>아기 스킨케어·세정제는 한두 가지로 정해 대용량으로.</b></li>
-<li><b>작은 물건은 장바구니에 담아 두고 장보기 날 한 번에 결제.</b> 결제 횟수만 줄여도 계획 밖 구매가 같이 줄어듭니다.</li>
-<li><b>5만 원이 넘는 비필수품은 3일 기다리기.</b> 최근 12개월 전자·가전 같은 비필수 단건이 ${bigNoness.length}건, ${man(sum(bigNoness.map(r => r.price)))}원이었습니다.</li>
-</ol>
-</section>
-
-<section>
-<h2>AI 제안 월 예산</h2>
-<p class="lede">쿠팡+카카오뱅크 기준(네이버페이 충전 제외). 회색 막대는 최근 12개월 월평균, 파란 막대는 AI가 제안하는 예산입니다. 조정률은 AI의 판단입니다.</p>
-<figure>${planChart()}</figure>
-<div class="total"><span>제안 예산 합계 (월)</span><strong>${man(planNext)}원</strong></div>
-<p class="note">지금 월평균 ${man(planCur)}원에서 월 ${man(planCur - planNext)}원, 1년 ${man((planCur - planNext) * 12)}원을 줄이는 안입니다. 여기서 '육아'는 쿠팡 육아용품과 은행 육아 거래이고, 아이 우유는 '식비'에 들어 있습니다. '순수 데이터' 탭의 월 예산 칸에 넣으면 넘은 달을 볼 수 있습니다.</p>
-</section>
-
-<section>
-<h2>쿠팡 절감 시나리오</h2>
-<p class="lede">쿠팡 최근 12개월(${last12[0].m} ~ ${last12.at(-1).m}, ${man(l12Total)}원) 기준. 각 줄 아래 회색 글자가 AI가 정한 가정입니다.</p>
-<figure>${hbars(SAVE.map(s => ({ k: s.what, v: s.save, rule: s.rule, tip: `${s.what}\n근거: ${s.basis}, ${won(s.base)}원\n가정: ${s.rule}\n연 ${won(s.save)}원` })), { labelW: 330, hiN: SAVE.length, sub: it => it.rule })}</figure>
-<div class="total"><span>연 절감 여력 합계 (가정)</span><strong>${man(saveTotal)}원</strong></div>
-<p class="note">항목끼리 일부 겹치므로(주말의 소액 주문은 두 항목에 다 들어간다) 합계는 상한에 가깝다.</p>
-</section>
-
-<section>
-<h2>이 분석의 한계</h2>
-<ol class="points">
-<li><b>쿠팡 금액은 할인 전이고 취소·반품이 빠지지 않았습니다.</b> 실제 결제액은 이보다 적습니다.</li>
-<li><b>은행 내역은 1년치뿐입니다.</b> 쿠팡처럼 몇 년치를 비교할 수 없습니다. 현대·KB 카드 대금과 네이버페이 충전은 이 분석에서 뺐습니다.</li>
-<li><b>카테고리와 육아 세부 분류는 상품명·상호 키워드로 나눴습니다.</b> 아이 우유처럼 가족이 같이 쓰는 물건은 실제로 누가 썼는지 알 수 없습니다.</li>
-</ol>
-</section>
-`;
-
-fs.writeFileSync(path.join(__dirname, 'report_body.js'), `// report.js 가 만든 파일. 직접 고치지 말 것. index.html 이 불러온다.\n// REPORT_HTML: 'AI 분석' 탭 (AI 판단·가이드), STATS_HTML: '순수 데이터' 탭 아래 쿠팡 4년 통계 (계산 결과만)\nwindow.REPORT_HTML = ${JSON.stringify(report)};\nwindow.STATS_HTML = ${JSON.stringify(stats)};\n`);
-console.log(`report_body.js: 보이는 소비 월 ${won(allAvg)}, 육아 월 ${won(babyTotal / 12)}, 제안 예산 월 ${won(planNext)}, 쿠팡 절감 ${won(saveTotal)}${stale ? ' (AI 판단 다시 필요)' : ''}`);
+// 순수 데이터 기록 (데이터 마지막 날 이름으로. 데이터가 쌓이면 파일도 쌓인다)
+fs.mkdirSync(path.join(__dirname, "analysis", "data"), { recursive: true });
+fs.writeFileSync(path.join(__dirname, "analysis", "data", dsOf(dataEnd) + ".md"), dataMd);
+console.log("analysis/data/" + dsOf(dataEnd) + ".md");

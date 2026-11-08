@@ -141,6 +141,18 @@ rect.b:not([rx]) { rx: 4px; } /* 리포트처럼 rx를 안 준 막대도 끝을 
 #tip { position: fixed; z-index: 50; pointer-events: none; padding: var(--space-xs) var(--space-sm); border-radius: var(--radius-sm); background: var(--color-ink); color: var(--color-card); font: 500 var(--text-sm)/1.5 var(--font-body); font-variant-numeric: tabular-nums; white-space: pre; opacity: 0; transition: opacity 120ms var(--ease-out); box-shadow: var(--shadow-tip); }
 #tip.on { opacity: 1; }
 
+/* md 로 쓴 분석 (표, 판정 칩) */
+.md-p { margin-top: var(--space-sm); max-width: 76ch; }
+.md-table { width: 100%; border-collapse: collapse; margin-top: var(--space-md); font-size: var(--text-sm); }
+.md-table th { text-align: left; padding: var(--space-xs) var(--space-sm) var(--space-xs) 0; color: var(--color-muted); font-weight: 500; border-bottom: 1px solid var(--color-rule-2); white-space: nowrap; }
+.md-table td { padding: var(--space-sm) var(--space-sm) var(--space-sm) 0; border-bottom: 1px solid var(--color-rule); vertical-align: top; font-variant-numeric: tabular-nums; }
+.md-table td:first-child { color: var(--color-ink); font-weight: 600; white-space: nowrap; }
+.scroll { overflow-x: auto; }
+code { font-family: ui-monospace, monospace; font-size: 0.9em; color: var(--color-ink-2); }
+.chip.good { background: color-mix(in oklab, var(--color-good) 22%, transparent); color: var(--color-good); }
+.chip.warn { background: var(--color-warn-soft); color: var(--color-warn-strong); }
+.ai-history { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-sm); padding-top: var(--space-xl); font-size: var(--text-sm); color: var(--color-muted); }
+
 /* 리포트 탭 */
 .total { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-md); margin-top: var(--space-md); padding: var(--space-md) var(--space-lg); border-radius: var(--radius-sm); background: var(--color-accent-soft); }
 .total span { font-weight: 700; color: var(--color-ink); }

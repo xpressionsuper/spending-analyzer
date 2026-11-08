@@ -200,7 +200,14 @@ function showView(v) {
   currentView = views[v] ? v : 'report'; // 기본은 AI 분석
   for (const [k, el] of Object.entries(views)) el.hidden = k !== currentView;
   tabs.forEach(b => b.setAttribute('aria-selected', String(b.dataset.view === currentView)));
-  if (currentView === 'report' && !views.report.innerHTML) views.report.innerHTML = window.REPORT_HTML || '<div class="state error" style="margin-top:var(--space-xl)"><h2 class="h3">AI 분석이 없습니다</h2><p>프로젝트 폴더에서 <b>node report.js</b>를 실행한 뒤 새로고침하세요.</p></div>';
+  if (currentView === 'report' && !views.report.innerHTML) renderAI(0);
+}
+// AI 분석: analysis/ai/*.md 를 report.js 가 바꾼 것(window.AI_REPORTS, 최신이 먼저). 날짜를 골라 이전 분석도 본다.
+function renderAI(i) {
+  const list = window.AI_REPORTS || [];
+  if (!list.length) { views.report.innerHTML = '<div class="state error" style="margin-top:var(--space-xl)"><h2 class="h3">AI 분석이 없습니다</h2><p>프로젝트 폴더에서 <b>node report.js</b>를 실행한 뒤 새로고침하세요.</p></div>'; return; }
+  views.report.innerHTML = `<div class="ai-history"><label for="ai-date">분석 기록</label><select class="pill" id="ai-date">${list.map((r, j) => `<option value="${j}"${j === i ? ' selected' : ''}>${esc(r.date)}${j === 0 ? ' (최신)' : ''}</option>`).join('')}</select><span>${list.length}개 저장됨</span></div>` + list[i].html;
+  views.report.querySelector('#ai-date').addEventListener('change', e => renderAI(+e.target.value));
 }
 tabs.forEach(b => b.addEventListener('click', () => { showView(b.dataset.view); writeState(); scrollTo(0, 0); }));
 

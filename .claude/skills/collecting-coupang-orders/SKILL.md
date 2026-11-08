@@ -23,7 +23,7 @@ description: Use when the user wants Coupang (쿠팡) order/purchase history (�
 3. **수집.** 이 폴더의 `scrape.js` 내용을 `evaluate_script`의 `function`으로 넘기고, `waitForStableDom: false`, `filePath: <스크래치패드>/coupang_raw.json`으로 실행한다. 결과가 커서 반드시 파일로 받는다.
 4. **변환.** `node .claude/skills/collecting-coupang-orders/to_csv.js <raw> data/coupang_<연도>.csv`를 실행한 뒤 raw 파일을 지운다.
 5. **md 원문 만들기.** `node .claude/skills/collecting-coupang-orders/to_md.js data/coupang_<연도>.csv`로 같은 이름의 `.md`를 만든다. 요약이 아니라 csv의 모든 행을 그대로 옮긴 표다. 분석(`report.js`)은 이 md를 읽는다.
-6. **분석 데이터 갱신.** `node build_data.js`(분석기 index.html용 data.js)와 `node report.js`(index.html의 리포트 탭용 report_body.js)를 실행한다.
+6. **분석 데이터 갱신.** `node build_data.js` → `node report.js`를 실행한다(analysis/data/ 에 순수 데이터 기록이 생긴다). AI 분석 업데이트까지 하려면 analysis/README.md 순서를 따른다.
 7. **보고.** 건수, 기간, 합계를 알린다.
 
 ## 자주 생기는 문제
